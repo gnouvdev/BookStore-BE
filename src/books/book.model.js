@@ -28,6 +28,13 @@ const bookSchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
     },
+    author: {
+      type: String,
+      required: true,
+    },
+    quantity: {
+      type: Number,
+    },
   },
   { timestamps: true }
 );

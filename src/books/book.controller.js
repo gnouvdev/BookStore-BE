@@ -72,10 +72,37 @@ const deleteABook = async (req, res) => {
     res.status(500).send({ message: "Failed to delete a books" });
   }
 };
+const searchBooks = async (req, res) => {
+  try {
+      const { title } = req.body; // Lấy từ khóa từ JSON body
+
+      if (!title) {
+          return res.status(400).json({ message: "Title is required" });
+      }
+
+      // Tìm kiếm sách theo title (không phân biệt hoa thường)
+      const books = await Book.find({
+          title: { $regex: title, $options: "i" }
+      });
+
+      if (books.length === 0) {
+          return res.status(404).json({ message: "No books found" });
+      }
+
+      res.status(200).json(books);
+  } catch (error) {
+      console.error("Error searching books:", error);
+      res.status(500).json({ message: "Failed to fetch books" });
+  }
+};
+
+module.exports = { searchBooks };
+
 module.exports = {
   postABook,
   getAllBooks,
   getSingleBook,
   UpdateBook,
   deleteABook,
+  searchBooks,
 };

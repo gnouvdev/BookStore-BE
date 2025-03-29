@@ -6,6 +6,7 @@ const {
   getSingleBook,
   UpdateBook,
   deleteABook,
+  searchBooks,
 } = require("./book.controller");
 const verifyAdminToken = require("../middleware/verifyAdminToken");
 const router = express.Router();
@@ -16,7 +17,7 @@ const router = express.Router();
 //put/patch = when edit or update something
 //delete = when delete something
 
-router.post("/create-book",verifyAdminToken, postABook);
+router.post("/create-book", verifyAdminToken, postABook);
 //get all books
 router.get("/", getAllBooks);
 
@@ -24,8 +25,11 @@ router.get("/", getAllBooks);
 router.get("/:id", getSingleBook);
 
 //update a book endpoint
-router.put("/edit/:id",verifyAdminToken, UpdateBook);
+router.put("/edit/:id", verifyAdminToken, UpdateBook);
 
 //delete book
-router.delete("/:id",verifyAdminToken, deleteABook);
+router.delete("/:id", verifyAdminToken, deleteABook);
+
+//search book
+router.post("/search", searchBooks);
 module.exports = router;
