@@ -34,6 +34,11 @@ const orderSchema = new mongoose.Schema(
       type: Number,
       required: true,
     },
+    status: {
+      type: String,
+      enum: ["Đang xử lý", "Đang giao hàng", "Hủy đơn hàng", "Đã giao"],
+      default: "Đang xử lý", // Trạng thái mặc định
+    },
   },
   {
     timestamps: true,
