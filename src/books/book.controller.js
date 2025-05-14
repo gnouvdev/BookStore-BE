@@ -137,27 +137,66 @@ const deleteABook = async (req, res) => {
 };
 const searchBooks = async (req, res) => {
   try {
-    const { title } = req.query;
+    const { query } = req.query;
 
-    if (!title) {
+    if (!query) {
       return res.status(400).send({ message: "Search query is required" });
     }
 
-    const books = await Book.find({
-      title: { $regex: title, $options: "i" }
-    })
-    .populate("author", "name")
-    .populate("category", "name")
-    .sort({ createdAt: -1 });
+    // Tìm kiếm sách theo BookTextIndex
+    const bookSearch = Book.aggregate([
+      {
+        $search: {
+          index: "BookTextIndex",
+          text: {
+            query: query,
+            path: { wildcard: "*" }
+          }
+        }
+      }
+    ]);
 
-    if (books.length === 0) {
+    // Tìm kiếm tác giả theo tên
+    const authorSearch = Author.find({
+      name: { $regex: query, $options: "i" }
+    }).select("_id");
+
+    // Chạy cả hai truy vấn song song
+    const [booksFromSearch, authors] = await Promise.all([bookSearch, authorSearch]);
+
+    // Lấy ID tác giả từ kết quả tìm kiếm
+    const authorIds = authors.map((author) => author._id);
+
+    // Tìm sách của các tác giả khớp
+    const booksFromAuthors = await Book.find({
+      author: { $in: authorIds }
+    });
+
+    // Kết hợp và loại bỏ trùng lặp
+    const allBooks = [...booksFromSearch, ...booksFromAuthors];
+    const uniqueBooks = Array.from(
+      new Map(allBooks.map((book) => [book._id.toString(), book])).values()
+    );
+
+    // Populate author và category
+    const populatedBooks = await Book.populate(uniqueBooks, [
+      { path: "author", select: "name" },
+      { path: "category", select: "name" }
+    ]);
+
+    // Sắp xếp theo createdAt
+    const sortedBooks = populatedBooks.sort(
+      (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
+    );
+
+    if (sortedBooks.length === 0) {
       return res.status(404).send({ message: "No books found" });
     }
 
-    res.status(200).send(books);
+    res.status(200).send(sortedBooks);
   } catch (error) {
     console.error("Error searching books:", error);
-    res.status(500).send({ message: "Failed to search books" });
+    res.status(500).send({ message: "Failed to search books", error: error.message });
   }
 };
 
