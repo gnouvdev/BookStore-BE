@@ -143,57 +143,86 @@ const searchBooks = async (req, res) => {
       return res.status(400).send({ message: "Search query is required" });
     }
 
-    // Tìm kiếm sách theo BookTextIndex
-    const bookSearch = Book.aggregate([
+    const books = await Book.aggregate([
       {
         $search: {
           index: "BookTextIndex",
           text: {
             query: query,
-            path: { wildcard: "*" }
+            path: ["title", "description", "tags", "author.name"],
+            score: { boost: { value: 1 } }
           }
+        }
+      },
+      {
+        $lookup: {
+          from: "authors", // Sửa thành "Author" nếu collection là "Author"
+          localField: "author",
+          foreignField: "_id",
+          as: "author"
+        }
+      },
+      {
+        $unwind: {
+          path: "$author",
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      {
+        $lookup: {
+          from: "categories",
+          localField: "category",
+          foreignField: "_id",
+          as: "category"
+        }
+      },
+      {
+        $unwind: {
+          path: "$category",
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      {
+        $addFields: {
+          searchScore: { $meta: "searchScore" } // Lấy score từ $search
+        }
+      },
+      {
+        $project: {
+          title: 1,
+          description: 1,
+          author: {
+            _id: "$author._id",
+            name: "$author.name"
+          },
+          category: {
+            _id: "$category._id",
+            name: "$category.name"
+          },
+          coverImage: 1,
+          price: 1,
+          quantity: 1,
+          trending: 1,
+          language: 1,
+          tags: 1,
+          publish: 1,
+          createdAt: 1,
+          searchScore: 1
+        }
+      },
+      {
+        $sort: {
+          searchScore: -1, // Sắp xếp theo mức độ liên quan (score cao nhất trước)
+          createdAt: -1 // Nếu score bằng nhau, ưu tiên sách mới hơn
         }
       }
     ]);
 
-    // Tìm kiếm tác giả theo tên
-    const authorSearch = Author.find({
-      name: { $regex: query, $options: "i" }
-    }).select("_id");
-
-    // Chạy cả hai truy vấn song song
-    const [booksFromSearch, authors] = await Promise.all([bookSearch, authorSearch]);
-
-    // Lấy ID tác giả từ kết quả tìm kiếm
-    const authorIds = authors.map((author) => author._id);
-
-    // Tìm sách của các tác giả khớp
-    const booksFromAuthors = await Book.find({
-      author: { $in: authorIds }
-    });
-
-    // Kết hợp và loại bỏ trùng lặp
-    const allBooks = [...booksFromSearch, ...booksFromAuthors];
-    const uniqueBooks = Array.from(
-      new Map(allBooks.map((book) => [book._id.toString(), book])).values()
-    );
-
-    // Populate author và category
-    const populatedBooks = await Book.populate(uniqueBooks, [
-      { path: "author", select: "name" },
-      { path: "category", select: "name" }
-    ]);
-
-    // Sắp xếp theo createdAt
-    const sortedBooks = populatedBooks.sort(
-      (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
-    );
-
-    if (sortedBooks.length === 0) {
+    if (books.length === 0) {
       return res.status(404).send({ message: "No books found" });
     }
 
-    res.status(200).send(sortedBooks);
+    res.status(200).send(books);
   } catch (error) {
     console.error("Error searching books:", error);
     res.status(500).send({ message: "Failed to search books", error: error.message });
