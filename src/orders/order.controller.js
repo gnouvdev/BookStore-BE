@@ -4,7 +4,6 @@ const createAOrder = async (req, res) => {
   try {
     console.log("Creating order with data:", req.body);
 
-    // Validate required fields
     const requiredFields = [
       "user",
       "name",
@@ -46,8 +45,9 @@ const getOrderByEmail = async (req, res) => {
   try {
     console.log("Getting orders for email:", req.params.email);
     const orders = await Order.find({ email: req.params.email })
-      .populate("productIds")
-      .populate("paymentMethod");
+      .populate("productIds.productId")
+      .populate("paymentMethod")
+      .lean();
     console.log("Found orders:", orders);
 
     res.status(200).json({
@@ -95,8 +95,9 @@ const getAllOrders = async (req, res) => {
   try {
     console.log("Getting all orders");
     const orders = await Order.find()
-      .populate("productIds")
-      .populate("paymentMethod");
+      .populate("productIds.productId")
+      .populate("paymentMethod")
+      .lean();
     console.log("Found orders:", orders);
 
     res.status(200).json({
@@ -117,8 +118,9 @@ const getOrdersByUserId = async (req, res) => {
   try {
     console.log("Getting orders for user ID:", req.params.userId);
     const orders = await Order.find({ user: req.params.userId })
-      .populate("productIds")
-      .populate("paymentMethod");
+      .populate("productIds.productId")
+      .populate("paymentMethod")
+      .lean();
     console.log("Found orders:", orders);
 
     res.status(200).json({
@@ -134,6 +136,7 @@ const getOrdersByUserId = async (req, res) => {
     });
   }
 };
+
 const deleteOrder = async (req, res) => {
   try {
     const { id } = req.params;
@@ -142,14 +145,15 @@ const deleteOrder = async (req, res) => {
       res.status(404).send({ message: "Order is not found" });
     }
     res.status(200).send({
-      message: "Order deleted successfullly ",
+      message: "Order deleted successfully",
       order: deleteOrder,
     });
   } catch (error) {
-    console.log("Error delete a order", error);
-    res.status(500).send({ message: "Failed to delete a order" });
+    console.log("Error deleting order:", error);
+    res.status(500).send({ message: "Failed to delete order" });
   }
 };
+
 module.exports = {
   createAOrder,
   getOrderByEmail,
