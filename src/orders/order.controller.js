@@ -2,60 +2,136 @@ const Order = require("./order.model");
 
 const createAOrder = async (req, res) => {
   try {
-    const newOrder = await Order(req.body);
-    const savedOrder = await newOrder.save();
-    res.status(200).json(savedOrder);
+    console.log("Creating order with data:", req.body);
+
+    // Validate required fields
+    const requiredFields = [
+      "user",
+      "name",
+      "email",
+      "address",
+      "phone",
+      "productIds",
+      "totalPrice",
+      "paymentMethod",
+    ];
+    const missingFields = requiredFields.filter((field) => !req.body[field]);
+
+    if (missingFields.length > 0) {
+      console.log("Missing required fields:", missingFields);
+      return res.status(400).json({
+        success: false,
+        message: `Missing required fields: ${missingFields.join(", ")}`,
+      });
+    }
+
+    const order = await Order.create(req.body);
+    console.log("Order created successfully:", order);
+
+    res.status(201).json({
+      success: true,
+      data: order,
+    });
   } catch (error) {
-    console.error("Error creating order", error);
-    res.status(500).json({ message: "Failed to create order" });
+    console.error("Error creating order:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error creating order",
+      error: error.message,
+    });
   }
 };
 
 const getOrderByEmail = async (req, res) => {
   try {
-    const { email } = req.params;
-    const orders = await Order.find({ email }).sort({ createdAt: -1 });
-    console.log("Email:", req.params.email);
-    console.log("Orders:", orders);
-    if (!orders) {
-      return res.status(404).json({ message: "Order not found" });
-    }
-    res.status(200).json(orders);
+    console.log("Getting orders for email:", req.params.email);
+    const orders = await Order.find({ email: req.params.email })
+      .populate("productIds")
+      .populate("paymentMethod");
+    console.log("Found orders:", orders);
+
+    res.status(200).json({
+      success: true,
+      data: orders,
+    });
   } catch (error) {
-    console.error("Error fetching orders", error);
-    res.status(500).json({ message: "Failed to fetch order" });
+    console.error("Error getting orders:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error getting orders",
+      error: error.message,
+    });
   }
 };
 
 const updateOrderStatus = async (req, res) => {
   try {
-    const { id } = req.params; // Lấy ID đơn hàng từ URL
-    const { status } = req.body; // Lấy trạng thái mới từ body
-
-    const updatedOrder = await Order.findByIdAndUpdate(
-      id,
-      { status },
-      { new: true } // Trả về document đã cập nhật
+    console.log("Updating order status:", {
+      id: req.params.id,
+      status: req.body.status,
+    });
+    const order = await Order.findByIdAndUpdate(
+      req.params.id,
+      { status: req.body.status },
+      { new: true }
     );
+    console.log("Updated order:", order);
 
-    if (!updatedOrder) {
-      return res.status(404).json({ message: "Order not found" });
-    }
-
-    res.status(200).json(updatedOrder);
+    res.status(200).json({
+      success: true,
+      data: order,
+    });
   } catch (error) {
-    console.error("Error updating order status", error);
-    res.status(500).json({ message: "Failed to update order status" });
+    console.error("Error updating order status:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error updating order status",
+      error: error.message,
+    });
   }
 };
 
 const getAllOrders = async (req, res) => {
   try {
-    const orders = await Order.find().populate("productIds"); // Lấy thông tin chi tiết sản phẩm
-    res.status(200).json(orders);
+    console.log("Getting all orders");
+    const orders = await Order.find()
+      .populate("productIds")
+      .populate("paymentMethod");
+    console.log("Found orders:", orders);
+
+    res.status(200).json({
+      success: true,
+      data: orders,
+    });
   } catch (error) {
-    console.error("Error fetching all orders", error);
-    res.status(500).json({ message: "Failed to fetch orders" });
+    console.error("Error getting all orders:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error getting all orders",
+      error: error.message,
+    });
+  }
+};
+
+const getOrdersByUserId = async (req, res) => {
+  try {
+    console.log("Getting orders for user ID:", req.params.userId);
+    const orders = await Order.find({ user: req.params.userId })
+      .populate("productIds")
+      .populate("paymentMethod");
+    console.log("Found orders:", orders);
+
+    res.status(200).json({
+      success: true,
+      data: orders,
+    });
+  } catch (error) {
+    console.error("Error getting orders:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error getting orders",
+      error: error.message,
+    });
   }
 };
 
@@ -63,5 +139,6 @@ module.exports = {
   createAOrder,
   getOrderByEmail,
   updateOrderStatus,
-  getAllOrders, // Export hàm mới
+  getAllOrders,
+  getOrdersByUserId,
 };

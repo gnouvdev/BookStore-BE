@@ -27,27 +27,18 @@ const getAllAuthors = async (req, res) => {
 
 // Lấy 1 tác giả
 const getSingleAuthor = async (req, res) => {
-    try {
-      const searchTerm = req.query.name; // Lấy từ khóa tìm kiếm từ query string
-      if (!searchTerm) {
-        return res.status(400).send({ message: "Search term is required" });
-      }
-  
-      const authors = await Author.find({
-        name: { $regex: searchTerm, $options: "i" }, // Tìm kiếm theo tên tác giả
-      });
-  
-      if (!authors || authors.length === 0) {
-        return res.status(404).send({ message: "No authors found" });
-      }
-  
-      res.status(200).json(authors);
-    } catch (error) {
-      console.error(error);
-      res.status(500).send({ message: "An error occurred while searching for authors" });
+  try {
+    const { id } = req.params;
+    const author = await Author.findById(id);
+    if (!author) {
+      return res.status(404).send({ message: "Author not found" });
     }
-  };
-  
+    res.status(200).send(author);
+  } catch (error) {
+    console.error("Error fetching author:", error);
+    res.status(500).send({ message: "Failed to fetch author" });
+  }
+};
 
 // Cập nhật tác giả
 const updateAuthor = async (req, res) => {

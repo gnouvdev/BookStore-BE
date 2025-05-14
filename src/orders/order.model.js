@@ -2,6 +2,11 @@ const mongoose = require("mongoose");
 
 const orderSchema = new mongoose.Schema(
   {
+    user: {
+      type: String,
+      ref: "User",
+      required: true,
+    },
     name: {
       type: String,
       required: true,
@@ -34,10 +39,34 @@ const orderSchema = new mongoose.Schema(
       type: Number,
       required: true,
     },
+    paymentMethod: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Payment",
+      required: true,
+    },
     status: {
       type: String,
-      enum: ["Đang xử lý", "Đang giao hàng", "Hủy đơn hàng", "Đã giao"],
-      default: "Đang xử lý", // Trạng thái mặc định
+      enum: ["pending", "processing", "completed", "cancelled"],
+      default: "pending",
+    },
+    paymentStatus: {
+      type: String,
+      enum: ["pending", "paid", "failed"],
+      default: "pending",
+    },
+    orderStatus: {
+      type: String,
+      enum: ["pending", "processing", "shipped", "delivered", "cancelled"],
+      default: "pending",
+    },
+    paymentDetails: {
+      transactionId: String,
+      paymentDate: Date,
+      paymentAmount: Number,
+      paymentCurrency: {
+        type: String,
+        default: "VND",
+      },
     },
   },
   {

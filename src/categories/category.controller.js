@@ -24,7 +24,7 @@ const getAllCategory = async (req, res) => {
 const getSingleCategory = async (req, res) => {
   try {
     const { id } = req.params;
-    const category = await Category.findById(id); // Sửa lỗi ở đây
+    const category = await Category.findById(id);
     if (!category) {
       return res.status(404).send({ message: "Category not found!" });
     }
@@ -43,7 +43,7 @@ const updateCategory = async (req, res) => {
       { ...req.body },
       { new: true }
     );
-    if (!updatedCategory) { // Sửa lỗi ở đây
+    if (!updatedCategory) {
       return res.status(404).send({ message: "Category not found" });
     }
     res.status(200).send({ message: "Update category successful", category: updatedCategory });
@@ -57,7 +57,7 @@ const deleteCategory = async (req, res) => {
   try {
     const { id } = req.params;
     const deletedCategory = await Category.findByIdAndDelete(id);
-    if (!deletedCategory) { // Sửa lỗi ở đây
+    if (!deletedCategory) {
       return res.status(404).send({ message: "Category not found" });
     }
     res.status(200).send({ message: "Delete category successful" });
@@ -67,10 +67,33 @@ const deleteCategory = async (req, res) => {
   }
 };
 
+const searchCategories = async (req, res) => {
+  try {
+    const { name } = req.query;
+    if (!name) {
+      return res.status(400).send({ message: "Search query is required" });
+    }
+
+    const categories = await Category.find({
+      name: { $regex: name, $options: "i" }
+    }).sort({ createdAt: -1 });
+
+    if (categories.length === 0) {
+      return res.status(404).send({ message: "No categories found" });
+    }
+
+    res.status(200).send(categories);
+  } catch (error) {
+    console.error("Error searching categories:", error.message);
+    res.status(500).send({ message: "Failed to search categories" });
+  }
+};
+
 module.exports = {
   addCategory,
   getAllCategory,
   getSingleCategory,
   updateCategory,
   deleteCategory,
+  searchCategories,
 };

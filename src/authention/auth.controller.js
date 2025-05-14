@@ -21,6 +21,7 @@ const loginWithFirebase = async (req, res) => {
     const decodedToken = await admin.auth().verifyIdToken(idToken);
     const firebaseId = decodedToken.uid;
     const email = decodedToken.email;
+    const photoURL = decodedToken.picture || "https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&f=y";
 
     // Tìm hoặc tạo user trong MongoDB
     let user = await User.findOne({ firebaseId });
@@ -28,6 +29,7 @@ const loginWithFirebase = async (req, res) => {
       user = new User({
         firebaseId,
         email,
+        photoURL,
         role: "user",
       });
       await user.save();
@@ -44,6 +46,13 @@ const loginWithFirebase = async (req, res) => {
       message: "Login successful",
       token: jwtToken,
       role: user.role,
+      user: {
+        id: user._id,
+        email: user.email,
+        fullName: user.fullName,
+        photoURL: user.photoURL,
+        role: user.role
+      }
     });
   } catch (error) {
     console.error("Firebase login error:", error);
@@ -59,7 +68,7 @@ const googleLogin = async (req, res) => {
     const firebaseId = decodedToken.uid;
     const email = decodedToken.email;
     const fullName = decodedToken.name || "";
-    const photo = decodedToken.picture || "";
+    const photoURL = decodedToken.picture || "https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&f=y";
 
     let user = await User.findOne({ firebaseId });
     if (!user) {
@@ -67,7 +76,7 @@ const googleLogin = async (req, res) => {
         firebaseId,
         email,
         fullName,
-        photo,
+        photoURL,
         role: "user",
       });
       await user.save();
@@ -83,6 +92,13 @@ const googleLogin = async (req, res) => {
       message: "Google login successful",
       token: jwtToken,
       role: user.role,
+      user: {
+        id: user._id,
+        email: user.email,
+        fullName: user.fullName,
+        photoURL: user.photoURL,
+        role: user.role
+      }
     });
   } catch (error) {
     console.error("Google login error:", error);

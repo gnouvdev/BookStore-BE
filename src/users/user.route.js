@@ -8,6 +8,7 @@ const {
   getUserProfile,
   updateProfile,
   addWishlist,
+  removeFromWishlist,
   getAllUsers,
   searchUsers,
   updateUser,
@@ -51,6 +52,10 @@ router.post("/admin", loginAdmin);
 // Profile routes
 router.get("/profile", verifyToken, getUserProfile);
 router.put("/profile", verifyToken, updateProfile);
+
+// Wishlist routes
+router.post("/wishlist", verifyToken, addWishlist);
+router.delete("/wishlist", verifyToken, removeFromWishlist);
 
 // Other routes
 router.get("/", verifyToken, getAllUsers);

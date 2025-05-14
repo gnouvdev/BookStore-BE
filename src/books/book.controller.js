@@ -51,23 +51,30 @@ const getAllBooks = async (req, res) => {
 const getSingleBook = async (req, res) => {
   try {
     const { id } = req.params;
+    console.log("Book ID received:", id);
+    console.log("Request params:", req.params);
+    console.log("Request query:", req.query);
 
-    // Kiểm tra id có hợp lệ không
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).send({ message: "Invalid book ID" });
+    if (!id) {
+      console.log("Error: No ID provided");
+      return res.status(400).json({ message: "Book ID is required" });
     }
 
     const book = await Book.findById(id)
-      .populate("author")
-      .populate("category");
+      .populate("author", "name")
+      .populate("category", "name");
+
+    console.log("Book found:", book ? "Yes" : "No");
     if (!book) {
-      return res.status(404).send({ message: "Book not found" });
+      console.log("Error: Book not found");
+      return res.status(404).json({ message: "Book not found" });
     }
 
-    res.status(200).send(book);
+    console.log("Successfully retrieved book:", book._id);
+    res.status(200).json(book);
   } catch (error) {
-    console.error("Error fetching book:", error);
-    res.status(500).send({ message: "Failed to fetch book", error });
+    console.error("Error in getSingleBook:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 };
 // update book
@@ -130,38 +137,27 @@ const deleteABook = async (req, res) => {
 };
 const searchBooks = async (req, res) => {
   try {
-    const { title, tags, author, language } = req.body;
+    const { title } = req.query;
 
-    const query = {};
-
-    if (title) {
-      query.title = { $regex: title, $options: "i" }; // Tìm kiếm không phân biệt hoa thường
+    if (!title) {
+      return res.status(400).send({ message: "Search query is required" });
     }
 
-    if (tags) {
-      query.tags = { $in: tags }; // Tìm kiếm sách có ít nhất một tag khớp
-    }
-
-    if (author) {
-      query.author = author; // Tìm kiếm theo tác giả
-    }
-
-    if (language) {
-      query.language = language; // Tìm kiếm theo ngôn ngữ
-    }
-
-    console.log("Search query:", query); // Log truy vấn tìm kiếm
-
-    const books = await Book.find(query);
+    const books = await Book.find({
+      title: { $regex: title, $options: "i" }
+    })
+    .populate("author", "name")
+    .populate("category", "name")
+    .sort({ createdAt: -1 });
 
     if (books.length === 0) {
-      return res.status(404).json({ message: "No books found" });
+      return res.status(404).send({ message: "No books found" });
     }
 
-    res.status(200).json(books);
+    res.status(200).send(books);
   } catch (error) {
     console.error("Error searching books:", error);
-    res.status(500).json({ message: "Failed to fetch books" });
+    res.status(500).send({ message: "Failed to search books" });
   }
 };
 

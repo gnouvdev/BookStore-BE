@@ -27,6 +27,7 @@ const bookSchema = new mongoose.Schema({
     default: "Tiếng Anh", // Giá trị mặc định
   },
   tags: [{ type: String }], // Mảng các chuỗi
+  publish: { type: String, required: false },
   createdAt: { type: Date, default: Date.now },
 });
 

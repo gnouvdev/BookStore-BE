@@ -34,7 +34,7 @@ router.post("/google", async (req, res) => {
     const token = jwt.sign(
       { id: user._id, email: user.email, role: user.role },
       JWT_SECRET,
-      { expiresIn: "24h" }
+      { expiresIn: "24h", algorithm: "HS256" }
     );
 
     // 4. Trả về JWT token và thông tin người dùng

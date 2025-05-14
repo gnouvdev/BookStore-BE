@@ -18,8 +18,12 @@ const router = express.Router();
 //delete = when delete something
 
 router.post("/create-book", verifyAdminToken, postABook);
+
 //get all books
 router.get("/", getAllBooks);
+
+//search books - must be before /:id route
+router.get("/search", searchBooks);
 
 //get single book
 router.get("/:id", getSingleBook);
@@ -30,6 +34,4 @@ router.put("/edit/:id", verifyAdminToken, UpdateBook);
 //delete book
 router.delete("/:id", verifyAdminToken, deleteABook);
 
-//search book
-router.post("/search", searchBooks);
 module.exports = router;

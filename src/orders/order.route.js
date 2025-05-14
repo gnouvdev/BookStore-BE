@@ -4,20 +4,20 @@ const {
   getOrderByEmail,
   updateOrderStatus,
   getAllOrders, // Import hàm lấy danh sách đơn hàng
+  getOrdersByUserId,
 } = require("./order.controller");
+const verifyToken = require("../middleware/verifyToken");
+const verifyAdminToken = require("../middleware/verifyAdminToken");
 
 const router = express.Router();
 
-// create order endpoint
-router.post("/", createAOrder);
+// Protected routes - require user authentication
+router.post("/", verifyToken, createAOrder);
+router.get("/email/:email", verifyToken, getOrderByEmail);
+router.get("/user/:userId", verifyToken, getOrdersByUserId);
 
-// get orders by user email
-router.get("/email/:email", getOrderByEmail);
-
-// get all orders
-router.get("/", getAllOrders); // Route để lấy danh sách tất cả đơn hàng
-
-// update order status
-router.put("/:id/status", updateOrderStatus); // Route để cập nhật trạng thái đơn hàng
+// Admin only routes
+router.get("/", verifyAdminToken, getAllOrders);
+router.put("/:id/status", verifyAdminToken, updateOrderStatus);
 
 module.exports = router;

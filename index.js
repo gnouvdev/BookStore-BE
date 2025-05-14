@@ -8,8 +8,6 @@ const User = require("./src/users/user.model"); // ✅ import User model
 require("dotenv").config();
 const port = process.env.PORT || 5000;
 
-
-
 // Middleware
 app.use(express.json());
 app.use(
@@ -46,6 +44,9 @@ const adminRoutes = require("./src/stats/admin.stats");
 const authorRoutes = require("./src/authors/author.route");
 const categoryRoutes = require("./src/categories/category.route");
 const authRoutes = require("./src/authention/auth.route");
+const recommendationRoutes = require("./src/recommened/recommendation.route");
+const cartRoutes = require("./src/cart/cart.route");
+const paymentRoutes = require("./src/payments/payment.route");
 // ✅ Mount routes
 app.use("/api/books", bookRoutes);
 app.use("/api/orders", orderRoutes);
@@ -54,3 +55,6 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/authors", authorRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/auth", authRoutes);
+app.use("/api/recommendations", recommendationRoutes);
+app.use("/api/cart", cartRoutes);
+app.use("/api/payments", paymentRoutes);

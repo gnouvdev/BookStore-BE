@@ -17,8 +17,9 @@ const userSchema = new mongoose.Schema(
       type: String,
       required: false, // Có thể không có nếu dùng Google
     },
-    photo: {
-      type: String, // Ảnh đại diện Google (nếu có)
+    photoURL: {
+      type: String,
+      default: "https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&f=y"
     },
     role: {
       type: String,

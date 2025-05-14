@@ -49,7 +49,7 @@ const login = async (req, res) => {
     const token = jwt.sign(
       { id: user._id, email: user.email, role: user.role },
       JWT_SECRET,
-      { expiresIn: "1h" }
+      { expiresIn: "1h", algorithm: "HS256" }
     );
 
     res.status(200).json({
@@ -90,7 +90,7 @@ const loginAdmin = async (req, res) => {
     const token = jwt.sign(
       { id: user._id, email: user.email, role: user.role },
       JWT_SECRET,
-      { expiresIn: "7d" }
+      { expiresIn: "7d", algorithm: "HS256" }
     );
 
     res.status(200).json({
@@ -113,7 +113,12 @@ const getUserProfile = async (req, res) => {
   const userId = req.user.id;
 
   try {
-    const user = await User.findById(userId, "-password");
+    const user = await User.findById(userId, "-password").populate({
+      path: "wishlist",
+      select: "_id title description coverImage price author",
+      model: "Book", // Thêm model name
+    });
+
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -130,12 +135,12 @@ const getUserProfile = async (req, res) => {
 // Cập nhật thông tin người dùng
 const updateProfile = async (req, res) => {
   const userId = req.user.id;
-  const { fullName, email, phone, address, photo } = req.body;
+  const { fullName, email, phone, address, photoURL } = req.body;
 
   try {
     const updatedUser = await User.findByIdAndUpdate(
       userId,
-      { fullName, email, phone, address, photo },
+      { fullName, email, phone, address, photoURL },
       { new: true, runValidators: true }
     ).select("-password");
 
@@ -149,7 +154,9 @@ const updateProfile = async (req, res) => {
   } catch (error) {
     console.error("Update Profile Error:", error);
     if (error.name === "ValidationError") {
-      return res.status(400).json({ message: "Invalid data provided", errors: error.errors });
+      return res
+        .status(400)
+        .json({ message: "Invalid data provided", errors: error.errors });
     }
     res.status(500).json({ message: "Failed to update profile" });
   }
@@ -173,6 +180,25 @@ const addWishlist = async (req, res) => {
   } catch (error) {
     console.error("Add Wishlist Error:", error);
     res.status(500).json({ message: "Failed to add to wishlist" });
+  }
+};
+
+// Xóa sách khỏi danh sách yêu thích
+const removeFromWishlist = async (req, res) => {
+  const userId = req.user.id;
+  const { bookId } = req.body;
+
+  try {
+    const user = await User.findById(userId);
+    user.wishlist = user.wishlist.filter((id) => id.toString() !== bookId);
+    await user.save();
+
+    res
+      .status(200)
+      .json({ message: "Book removed from wishlist", wishlist: user.wishlist });
+  } catch (error) {
+    console.error("Remove from Wishlist Error:", error);
+    res.status(500).json({ message: "Failed to remove from wishlist" });
   }
 };
 
@@ -203,6 +229,10 @@ const searchUsers = async (req, res) => {
   const { query } = req.query;
 
   try {
+    if (!query) {
+      return res.status(400).json({ message: "Search query is required" });
+    }
+
     const users = await User.find(
       {
         $or: [
@@ -211,9 +241,22 @@ const searchUsers = async (req, res) => {
         ],
       },
       "-password"
+    ).sort({ createdAt: -1 });
+
+    if (users.length === 0) {
+      return res.status(404).json({ message: "No users found" });
+    }
+
+    const usersWithOrdersCount = await Promise.all(
+      users.map(async (user) => {
+        const ordersCount = await Order.countDocuments({ userId: user._id });
+        return { ...user.toObject(), ordersCount };
+      })
     );
 
-    res.status(200).json({ message: "Search results", users });
+    res
+      .status(200)
+      .json({ message: "Search results", users: usersWithOrdersCount });
   } catch (error) {
     console.error("Search Users Error:", error);
     res.status(500).json({ message: "Failed to search users" });
@@ -270,6 +313,7 @@ module.exports = {
   getUserProfile,
   updateProfile,
   addWishlist,
+  removeFromWishlist,
   getAllUsers,
   searchUsers,
   updateUser,
