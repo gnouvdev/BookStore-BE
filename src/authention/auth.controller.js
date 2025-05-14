@@ -39,7 +39,7 @@ const loginWithFirebase = async (req, res) => {
     const jwtToken = jwt.sign(
       { id: user._id, email: user.email, role: user.role },
       process.env.JWT_SECRET_KEY,
-      { expiresIn: "1h", algorithm: "HS256" }
+      { expiresIn: "1d", algorithm: "HS256" }
     );
 
     res.status(200).json({

@@ -5,72 +5,89 @@ const { validateObjectId } = require("../utils/validateObjectId");
 // Tạo đánh giá mới
 exports.createReview = async (req, res) => {
   try {
-    const { bookId, orderId, rating, comment } = req.body;
-    const userId = req.user._id;
+    const { bookId, rating, comment } = req.body;
+    const userEmail = req.user.email;
 
-    // Validate input
-    if (!validateObjectId(bookId) || !validateObjectId(orderId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid book or order ID",
-      });
-    }
-
-    // Kiểm tra đơn hàng
-    const order = await Order.findOne({
-      _id: orderId,
-      user: userId,
+    console.log("Creating review with data:", {
+      bookId,
+      userEmail,
+      rating,
+      comment,
     });
 
-    if (!order) {
-      return res.status(404).json({
+    // Validate input
+    if (!validateObjectId(bookId)) {
+      return res.status(400).json({
         success: false,
-        message: "Order not found",
+        message: "Invalid book ID",
       });
     }
 
-    if (order.status !== "completed") {
-      return res.status(400).json({
-        success: false,
-        message: "Can only review books from completed orders",
-        orderStatus: order.status,
+    // Kiểm tra xem người dùng đã mua sách và đơn hàng đã hoàn thành chưa
+    const completedOrder = await Order.findOne({
+      email: userEmail,
+      status: "completed",
+      productIds: {
+        $elemMatch: {
+          productId: bookId,
+        },
+      },
+    });
+
+    console.log("Found completed order:", completedOrder);
+
+    if (!completedOrder) {
+      // Kiểm tra thêm để xem có đơn hàng nào không
+      const anyOrder = await Order.findOne({
+        email: userEmail,
+        productIds: {
+          $elemMatch: {
+            productId: bookId,
+          },
+        },
       });
-    }
 
-    // Kiểm tra xem sản phẩm có trong đơn hàng không
-    const productInOrder = order.productIds.find(
-      (item) => item.productId.toString() === bookId
-    );
+      console.log("Any order found:", anyOrder);
 
-    if (!productInOrder) {
+      // Kiểm tra cấu trúc của productIds trong đơn hàng
+      if (anyOrder) {
+        console.log(
+          "Order productIds structure:",
+          JSON.stringify(anyOrder.productIds, null, 2)
+        );
+      }
+
       return res.status(400).json({
         success: false,
-        message: "Book not found in this order",
-        orderId,
-        bookId,
+        message:
+          "You can only review books that you have purchased and the order is completed",
+        debug: {
+          hasAnyOrder: !!anyOrder,
+          orderStatus: anyOrder?.status,
+        },
       });
     }
 
     // Kiểm tra xem đã đánh giá chưa
     const existingReview = await Review.findOne({
-      user: userId,
+      user: req.user.id,
       book: bookId,
-      order: orderId,
     });
+
+    console.log("Existing review:", existingReview);
 
     if (existingReview) {
       return res.status(400).json({
         success: false,
-        message: "You have already reviewed this book for this order",
+        message: "You have already reviewed this book",
         reviewId: existingReview._id,
       });
     }
 
     // Tạo đánh giá mới
     const review = await Review.create({
-      user: userId,
+      user: req.user.id,
       book: bookId,
-      order: orderId,
       rating,
       comment,
     });

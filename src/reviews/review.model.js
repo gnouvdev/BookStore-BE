@@ -12,11 +12,6 @@ const reviewSchema = new mongoose.Schema(
       ref: "Book",
       required: true,
     },
-    order: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Order",
-      required: true,
-    },
     rating: {
       type: Number,
       required: true,
@@ -32,7 +27,7 @@ const reviewSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Đảm bảo mỗi người dùng chỉ đánh giá một lần cho mỗi sản phẩm trong một đơn hàng
-reviewSchema.index({ user: 1, book: 1, order: 1 }, { unique: true });
+// Đảm bảo mỗi người dùng chỉ đánh giá một lần cho mỗi sách
+reviewSchema.index({ user: 1, book: 1 }, { unique: true });
 
 module.exports = mongoose.model("Review", reviewSchema);
