@@ -42,6 +42,18 @@ router.post("/register", async (req, res) => {
     res.status(500).json({ message: "Failed to register user" });
   }
 });
+const getCurrentUser = async (req, res) => {
+  try {
+    const user = await User.findOne({ firebaseId: req.user.uid });
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    res.status(200).json({ data: user });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+router.get("/me", verifyToken, getCurrentUser);
 
 // Đăng nhập người dùng
 router.post("/login", login);

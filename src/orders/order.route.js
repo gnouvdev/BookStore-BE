@@ -5,6 +5,7 @@ const {
   updateOrderStatus,
   getAllOrders, // Import hàm lấy danh sách đơn hàng
   getOrdersByUserId,
+  deleteOrder,
 } = require("./order.controller");
 const verifyToken = require("../middleware/verifyToken");
 const verifyAdminToken = require("../middleware/verifyAdminToken");
@@ -19,5 +20,6 @@ router.get("/user/:userId", verifyToken, getOrdersByUserId);
 // Admin only routes
 router.get("/", verifyAdminToken, getAllOrders);
 router.put("/:id/status", verifyAdminToken, updateOrderStatus);
+router.delete("/:id", verifyAdminToken, deleteOrder);
 
 module.exports = router;

@@ -3,42 +3,36 @@ const mongoose = require("mongoose");
 const orderSchema = new mongoose.Schema(
   {
     user: {
-      type: String,
+      type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
     },
-    name: {
-      type: String,
-      required: true,
-    },
-    email: {
-      type: String,
-      required: true,
-    },
+    name: { type: String, required: true },
+    email: { type: String, required: true },
     address: {
-      city: {
-        type: String,
-        required: true,
-      },
+      street: String,
+      city: { type: String, required: true },
       country: String,
       state: String,
       zipcode: String,
     },
-    phone: {
-      type: Number,
-      required: true,
-    },
+    phone: { type: String, required: true },
     productIds: [
       {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Book",
-        required: true,
+        productId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "Book",
+          required: true,
+        },
+        quantity: {
+          type: Number,
+          required: true,
+          min: 1,
+          default: 1,
+        },
       },
     ],
-    totalPrice: {
-      type: Number,
-      required: true,
-    },
+    totalPrice: { type: Number, required: true, min: 0 },
     paymentMethod: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Payment",
@@ -46,7 +40,7 @@ const orderSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["pending", "processing", "completed", "cancelled"],
+      enum: ["pending", "processing", "shipped", "delivered", "completed", "cancelled"],
       default: "pending",
     },
     paymentStatus: {
@@ -54,26 +48,18 @@ const orderSchema = new mongoose.Schema(
       enum: ["pending", "paid", "failed"],
       default: "pending",
     },
-    orderStatus: {
-      type: String,
-      enum: ["pending", "processing", "shipped", "delivered", "cancelled"],
-      default: "pending",
-    },
     paymentDetails: {
-      transactionId: String,
-      paymentDate: Date,
-      paymentAmount: Number,
-      paymentCurrency: {
-        type: String,
-        default: "VND",
-      },
+      transactionId: { type: String, required: function () { return this.paymentStatus === "paid"; } },
+      paymentDate: { type: Date, required: function () { return this.paymentStatus === "paid"; } },
+      paymentAmount: { type: Number, required: function () { return this.paymentStatus === "paid"; } },
+      paymentCurrency: { type: String, default: "VND" },
     },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
-const Order = mongoose.model("Order", orderSchema);
+orderSchema.index({ user: 1 });
+orderSchema.index({ status: 1 });
 
+const Order = mongoose.model("Order", orderSchema);
 module.exports = Order;
