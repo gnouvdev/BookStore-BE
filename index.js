@@ -28,6 +28,7 @@ const authRoutes = require("./src/authention/auth.route");
 const recommendationRoutes = require("./src/recommened/recommendation.route");
 const cartRoutes = require("./src/cart/cart.route");
 const paymentRoutes = require("./src/payments/payment.route");
+const reviewRoutes = require("./src/reviews/review.route");
 
 app.use("/api/books", bookRoutes);
 app.use("/api/orders", orderRoutes);
@@ -39,6 +40,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/recommendations", recommendationRoutes);
 app.use("/api/cart", cartRoutes);
 app.use("/api/payments", paymentRoutes);
+app.use("/api/reviews", reviewRoutes);
 
 // Test route
 app.get("/", (req, res) => {
