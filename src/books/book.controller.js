@@ -1,6 +1,8 @@
 const Book = require("./book.model");
 const Author = require("../authors/author.model"); // Import model Author
 const mongoose = require("mongoose");
+const Category = require("../categories/category.model"); // Import model Category
+const { remove: removeDiacritics } = require("diacritics");
 
 const postABook = async (req, res) => {
   try {
@@ -137,95 +139,195 @@ const deleteABook = async (req, res) => {
 };
 const searchBooks = async (req, res) => {
   try {
-    const { query } = req.query;
+    const { query, type } = req.query;
+    console.log("Search request received:", { query, type });
 
     if (!query) {
-      return res.status(400).send({ message: "Search query is required" });
+      console.log("No query parameter provided");
+      return res.status(400).json({ message: "Query parameter is required" });
     }
 
-    const books = await Book.aggregate([
-      {
-        $search: {
-          index: "BookTextIndex",
-          text: {
-            query: query,
-            path: ["title", "description", "tags", "author.name"],
-            score: { boost: { value: 1 } }
-          }
-        }
-      },
-      {
-        $lookup: {
-          from: "authors", // Sửa thành "Author" nếu collection là "Author"
-          localField: "author",
-          foreignField: "_id",
-          as: "author"
-        }
-      },
-      {
-        $unwind: {
-          path: "$author",
-          preserveNullAndEmptyArrays: true
-        }
-      },
-      {
-        $lookup: {
-          from: "categories",
-          localField: "category",
-          foreignField: "_id",
-          as: "category"
-        }
-      },
-      {
-        $unwind: {
-          path: "$category",
-          preserveNullAndEmptyArrays: true
-        }
-      },
-      {
-        $addFields: {
-          searchScore: { $meta: "searchScore" } // Lấy score từ $search
-        }
-      },
-      {
-        $project: {
-          title: 1,
-          description: 1,
-          author: {
-            _id: "$author._id",
-            name: "$author.name"
-          },
-          category: {
-            _id: "$category._id",
-            name: "$category.name"
-          },
-          coverImage: 1,
-          price: 1,
-          quantity: 1,
-          trending: 1,
-          language: 1,
-          tags: 1,
-          publish: 1,
-          createdAt: 1,
-          searchScore: 1
-        }
-      },
-      {
-        $sort: {
-          searchScore: -1, // Sắp xếp theo mức độ liên quan (score cao nhất trước)
-          createdAt: -1 // Nếu score bằng nhau, ưu tiên sách mới hơn
-        }
-      }
-    ]);
+    // Loại bỏ dấu từ query và chuẩn hóa khoảng trắng
+    const normalizedQuery = removeDiacritics(query)
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, " ");
+    console.log("Normalized query:", normalizedQuery);
 
-    if (books.length === 0) {
-      return res.status(404).send({ message: "No books found" });
+    let searchQuery = {};
+    if (type === "title") {
+      searchQuery.$or = [
+        { title: { $regex: query, $options: "i" } },
+        { title: { $regex: normalizedQuery, $options: "i" } },
+      ];
+    } else if (type === "author") {
+      // Tìm kiếm theo tên tác giả
+      const authors = await Author.find({
+        $or: [
+          { name: { $regex: query, $options: "i" } },
+          { name: { $regex: normalizedQuery, $options: "i" } },
+        ],
+      });
+      const authorIds = authors.map((author) => author._id);
+      searchQuery.author = { $in: authorIds };
+    } else if (type === "category") {
+      // Tìm kiếm theo tên danh mục
+      const categories = await Category.find({
+        $or: [
+          { name: { $regex: query, $options: "i" } },
+          { name: { $regex: normalizedQuery, $options: "i" } },
+        ],
+      });
+      const categoryIds = categories.map((category) => category._id);
+      searchQuery.category = { $in: categoryIds };
+    } else if (type === "tag") {
+      searchQuery.$or = [
+        { tags: { $regex: query, $options: "i" } },
+        { tags: { $regex: normalizedQuery, $options: "i" } },
+      ];
+    } else {
+      // Tìm kiếm tổng hợp
+      const [authors, categories] = await Promise.all([
+        Author.find({
+          $or: [
+            { name: { $regex: query, $options: "i" } },
+            { name: { $regex: normalizedQuery, $options: "i" } },
+          ],
+        }),
+        Category.find({
+          $or: [
+            { name: { $regex: query, $options: "i" } },
+            { name: { $regex: normalizedQuery, $options: "i" } },
+          ],
+        }),
+      ]);
+
+      const authorIds = authors.map((author) => author._id);
+      const categoryIds = categories.map((category) => category._id);
+
+      // Tạo mảng các từ khóa để tìm kiếm
+      const searchTerms = [
+        query,
+        normalizedQuery,
+        ...query.split(/\s+/),
+        ...normalizedQuery.split(/\s+/),
+      ].filter((term) => term.length > 0);
+
+      // Tạo mảng các RegExp objects
+      const searchRegexes = searchTerms.map((term) => new RegExp(term, "i"));
+
+      searchQuery = {
+        $or: [
+          // Tìm kiếm theo tiêu đề
+          { title: { $in: searchRegexes } },
+          // Tìm kiếm theo tác giả
+          { author: { $in: authorIds } },
+          // Tìm kiếm theo danh mục
+          { category: { $in: categoryIds } },
+          // Tìm kiếm theo tags
+          { tags: { $in: searchRegexes } },
+        ],
+      };
     }
 
-    res.status(200).send(books);
+    console.log("Search query:", JSON.stringify(searchQuery, null, 2));
+
+    const books = await Book.find(searchQuery)
+      .populate("author", "name")
+      .populate("category", "name")
+      .limit(20);
+
+    console.log(`Found ${books.length} books`);
+    res.status(200).json(books);
   } catch (error) {
     console.error("Error searching books:", error);
-    res.status(500).send({ message: "Failed to search books", error: error.message });
+    res.status(500).json({
+      message: "Error searching books",
+      error: error.message,
+      stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
+    });
+  }
+};
+
+const getSearchSuggestions = async (req, res) => {
+  try {
+    const { query } = req.query;
+    console.log("Search suggestions request received:", { query });
+
+    if (!query) {
+      console.log("No query parameter provided");
+      return res.status(400).json({ message: "Query parameter is required" });
+    }
+
+    // Loại bỏ dấu từ query
+    const normalizedQuery = removeDiacritics(query);
+    console.log("Normalized query:", normalizedQuery);
+
+    // Tìm kiếm sách theo tiêu đề
+    const books = await Book.find({
+      $or: [
+        { title: { $regex: query, $options: "i" } },
+        { title: { $regex: normalizedQuery, $options: "i" } },
+      ],
+    })
+      .populate("author", "name")
+      .limit(5);
+
+    // Tìm kiếm tác giả
+    const authors = await Author.find({
+      $or: [
+        { name: { $regex: query, $options: "i" } },
+        { name: { $regex: normalizedQuery, $options: "i" } },
+      ],
+    }).limit(5);
+
+    // Tìm kiếm danh mục
+    const categories = await Category.find({
+      $or: [
+        { name: { $regex: query, $options: "i" } },
+        { name: { $regex: normalizedQuery, $options: "i" } },
+      ],
+    }).limit(5);
+
+    // Tìm kiếm tags
+    const booksWithTags = await Book.find({
+      $or: [
+        { tags: { $regex: query, $options: "i" } },
+        { tags: { $regex: normalizedQuery, $options: "i" } },
+      ],
+    }).select("tags");
+
+    // Lấy danh sách tags duy nhất
+    const tags = [...new Set(booksWithTags.flatMap((book) => book.tags))]
+      .filter((tag) => {
+        const normalizedTag = removeDiacritics(tag);
+        return (
+          tag.toLowerCase().includes(query.toLowerCase()) ||
+          normalizedTag.toLowerCase().includes(normalizedQuery.toLowerCase())
+        );
+      })
+      .slice(0, 5);
+
+    console.log("Search suggestions results:", {
+      booksCount: books.length,
+      authorsCount: authors.length,
+      categoriesCount: categories.length,
+      tagsCount: tags.length,
+    });
+
+    res.status(200).json({
+      books,
+      authors,
+      categories,
+      tags,
+    });
+  } catch (error) {
+    console.error("Error getting search suggestions:", error);
+    res.status(500).json({
+      message: "Error getting search suggestions",
+      error: error.message,
+      stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
+    });
   }
 };
 
@@ -236,4 +338,5 @@ module.exports = {
   UpdateBook,
   deleteABook,
   searchBooks,
+  getSearchSuggestions,
 };
