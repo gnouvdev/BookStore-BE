@@ -15,10 +15,11 @@ const {
   deleteUser,
 } = require("./user.controller");
 const verifyToken = require("../middleware/verifyToken");
+const jwt = require("jsonwebtoken");
 
 // Đăng ký người dùng
 router.post("/register", async (req, res) => {
-  const { uid, email, fullName, password, photo } = req.body;
+  const { idToken, fullName, email } = req.body;
   console.log("Received data:", req.body);
   try {
     const existingUser = await User.findOne({ email });
@@ -27,16 +28,26 @@ router.post("/register", async (req, res) => {
     }
 
     const newUser = new User({
-      firebaseId: uid,
+      firebaseId: idToken, // Sử dụng idToken làm firebaseId
       email,
       fullName,
-      password,
-      photo,
       role: "user",
     });
 
     await newUser.save();
-    res.status(201).json({ message: "User registered successfully" });
+
+    // Tạo JWT token
+    const token = jwt.sign(
+      { id: newUser._id, email: newUser.email, role: newUser.role },
+      process.env.JWT_SECRET_KEY,
+      { expiresIn: "7d" }
+    );
+
+    res.status(201).json({
+      message: "User registered successfully",
+      token,
+      role: newUser.role,
+    });
   } catch (error) {
     console.error("Error saving user to database:", error);
     res.status(500).json({ message: "Failed to register user" });

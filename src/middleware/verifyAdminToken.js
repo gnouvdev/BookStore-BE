@@ -37,7 +37,6 @@ const verifyAdminToken = async (req, res, next) => {
         userData = {
           id: decodedToken.uid,
           email: decodedToken.email,
-          role: decodedToken.role,
         };
       } catch (firebaseError) {
         console.error("Lỗi xác minh Firebase token:", firebaseError);
@@ -45,19 +44,20 @@ const verifyAdminToken = async (req, res, next) => {
       }
     }
 
-    // Kiểm tra role admin
-    if (!userData || userData.role !== "admin") {
-      // Nếu không có role trong token, kiểm tra trong database
-      const user = await User.findById(userData.id);
-      if (!user || user.role !== "admin") {
-        return res
-          .status(403)
-          .json({ message: "Không có quyền truy cập admin" });
-      }
-      userData.role = user.role;
+    // Kiểm tra role admin trong database
+    const user = await User.findOne({
+      $or: [{ _id: userData.id }, { firebaseId: userData.id }],
+    });
+
+    if (!user || user.role !== "admin") {
+      return res.status(403).json({ message: "Không có quyền truy cập admin" });
     }
 
+    // Cập nhật userData với thông tin từ database
+    userData.role = user.role;
+    userData.id = user._id;
     req.user = userData;
+
     return next();
   } catch (error) {
     console.error("Lỗi xác minh token:", error);
