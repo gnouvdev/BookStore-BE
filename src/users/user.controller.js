@@ -71,28 +71,41 @@ const login = async (req, res) => {
 // Đăng nhập admin
 const loginAdmin = async (req, res) => {
   const { email, password } = req.body;
+  console.log("Admin login attempt for email:", email);
 
   try {
     const user = await User.findOne({ email });
     if (!user) {
+      console.log("Admin login failed: Email not found");
       return res.status(401).json({ message: "Email không tồn tại" });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
+      console.log("Admin login failed: Invalid password");
       return res.status(401).json({ message: "Mật khẩu không đúng" });
     }
 
     if (user.role !== "admin") {
+      console.log("Admin login failed: User is not an admin");
       return res.status(403).json({ message: "Không phải tài khoản admin" });
     }
 
+    console.log("Admin login successful, generating token");
     const token = jwt.sign(
-      { id: user._id, email: user.email, role: user.role },
-      JWT_SECRET,
-      { expiresIn: "7d", algorithm: "HS256" }
+      {
+        id: user._id,
+        email: user.email,
+        role: user.role,
+      },
+      process.env.JWT_SECRET_KEY,
+      {
+        expiresIn: "7d",
+        algorithm: "HS256",
+      }
     );
 
+    console.log("Admin token generated successfully");
     res.status(200).json({
       message: "Đăng nhập thành công",
       token,

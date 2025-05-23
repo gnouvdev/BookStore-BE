@@ -1,132 +1,250 @@
 const Cart = require("./cart.model");
 const Book = require("../books/book.model");
+const { validateObjectId } = require("../utils/validateObjectId");
 
-const getCart = async (req, res) => {
+// Get cart by user ID
+exports.getCartByUserId = async (req, res) => {
   try {
-    const cart = await Cart.findOne({ userId: req.user.id }).populate({
-      path: "items.bookId",
-      select: "title coverImage price.newPrice",
-    });
+    const firebaseId = req.user.id;
+    console.log("Getting cart for user:", firebaseId);
+
+    let cart = await Cart.findOne({
+      $or: [{ user: req.user.id }, { firebaseId: firebaseId }],
+    }).populate("items.book");
+
     if (!cart) {
-      return res.status(200).json({ items: [], totalAmount: 0 });
+      // Tạo giỏ hàng mới nếu chưa có
+      cart = await Cart.create({
+        user: req.user.id,
+        firebaseId: firebaseId,
+        items: [],
+      });
     }
-    const items = cart.items.map((item) => ({
-      bookId: item.bookId._id,
-      title: item.bookId.title,
-      coverImage: item.bookId.coverImage,
-      price: item.price,
-      quantity: item.quantity,
-    }));
-    const totalAmount = cart.items.reduce((sum, item) => sum + item.price * item.quantity, 0);
-    console.log("Cart fetched:", { userId: req.user.id, items });
-    res.status(200).json({ items, totalAmount });
+
+    res.status(200).json({
+      success: true,
+      data: cart,
+    });
   } catch (error) {
-    console.error("Error fetching cart:", error);
-    res.status(500).json({ message: "Server error" });
+    console.error("Get cart error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Internal server error",
+    });
   }
 };
 
-const addToCart = async (req, res) => {
+// Add item to cart
+exports.addToCart = async (req, res) => {
   try {
     const { bookId, quantity } = req.body;
+    const firebaseId = req.user.id;
+
+    if (!validateObjectId(bookId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid book ID",
+      });
+    }
+
+    // Kiểm tra sách tồn tại và lấy giá
     const book = await Book.findById(bookId);
     if (!book) {
-      return res.status(404).json({ message: "Book not found" });
-    }
-    if (book.quantity < quantity) {
-      return res.status(400).json({ message: "Insufficient stock" });
+      return res.status(404).json({
+        success: false,
+        message: "Book not found",
+      });
     }
 
-    let cart = await Cart.findOne({ userId: req.user.id });
+    // Lấy giá mới của sách
+    const price = book.price.newPrice || book.price.oldPrice;
+    if (!price) {
+      return res.status(400).json({
+        success: false,
+        message: "Book price not available",
+      });
+    }
+
+    // Tìm hoặc tạo giỏ hàng
+    let cart = await Cart.findOne({
+      $or: [{ user: req.user.id }, { firebaseId: firebaseId }],
+    });
+
     if (!cart) {
-      cart = new Cart({ userId: req.user.id, items: [] });
+      cart = await Cart.create({
+        user: req.user.id,
+        firebaseId: firebaseId,
+        items: [],
+      });
     }
 
-    const existingItem = cart.items.find((item) => item.bookId.toString() === bookId);
+    // Kiểm tra sách đã có trong giỏ hàng chưa
+    const existingItem = cart.items.find(
+      (item) => item.book.toString() === bookId
+    );
+
     if (existingItem) {
-      if (book.quantity < existingItem.quantity + quantity) {
-        return res.status(400).json({ message: "Insufficient stock" });
-      }
+      // Cập nhật số lượng và giá nếu đã có
       existingItem.quantity += quantity;
+      existingItem.price = price; // Cập nhật giá mới
     } else {
-      cart.items.push({ bookId, quantity, price: book.price.newPrice });
+      // Thêm mới nếu chưa có
+      cart.items.push({
+        book: bookId,
+        quantity,
+        price, // Thêm giá vào item mới
+      });
     }
 
-    cart.updatedAt = Date.now();
     await cart.save();
-    console.log("Cart updated:", { userId: req.user.id, bookId });
-    res.status(200).json({ message: "Item added to cart", cart });
+    await cart.populate("items.book");
+
+    res.status(200).json({
+      success: true,
+      data: cart,
+      message: "Item added to cart successfully",
+    });
   } catch (error) {
-    console.error("Error adding to cart:", error);
-    res.status(500).json({ message: "Server error" });
+    console.error("Add to cart error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Internal server error",
+    });
   }
 };
 
-const clearCart = async (req, res) => {
+// Update cart item quantity
+exports.updateCartItem = async (req, res) => {
   try {
-    await Cart.deleteOne({ userId: req.user.id });
-    console.log("Cart cleared:", { userId: req.user.id });
-    res.status(200).json({ message: "Cart cleared" });
-  } catch (error) {
-    console.error("Error clearing cart:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-};
+    const { bookId, quantity } = req.body;
+    const firebaseId = req.user.id;
 
-const removeFromCart = async (req, res) => {
-  try {
-    console.log("Removing item:", { userId: req.user.id, bookId: req.params.bookId });
-    const cart = await Cart.findOne({ userId: req.user.id });
+    if (!validateObjectId(bookId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid book ID",
+      });
+    }
+
+    const cart = await Cart.findOne({
+      $or: [{ user: req.user.id }, { firebaseId: firebaseId }],
+    });
+
     if (!cart) {
-      return res.status(404).json({ message: "Cart not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Cart not found",
+      });
     }
-    const itemExists = cart.items.some((item) => item.bookId.toString() === req.params.bookId);
-    if (!itemExists) {
-      return res.status(404).json({ message: "Item not in cart" });
+
+    const itemIndex = cart.items.findIndex(
+      (item) => item.book.toString() === bookId
+    );
+
+    if (itemIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        message: "Item not found in cart",
+      });
     }
-    cart.items = cart.items.filter((item) => item.bookId.toString() !== req.params.bookId);
-    cart.updatedAt = Date.now();
+
+    if (quantity <= 0) {
+      // Xóa item nếu số lượng <= 0
+      cart.items.splice(itemIndex, 1);
+    } else {
+      // Cập nhật số lượng
+      cart.items[itemIndex].quantity = quantity;
+    }
+
     await cart.save();
-    console.log("Cart after remove:", cart);
-    res.status(200).json({ message: "Item removed", cart });
+    await cart.populate("items.book");
+
+    res.status(200).json({
+      success: true,
+      data: cart,
+      message: "Cart updated successfully",
+    });
   } catch (error) {
-    console.error("Error removing item:", error);
-    res.status(500).json({ message: "Server error" });
+    console.error("Update cart error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Internal server error",
+    });
   }
 };
 
-const updateCartItemQuantity = async (req, res) => {
+// Remove item from cart
+exports.removeFromCart = async (req, res) => {
   try {
-    const { quantity } = req.body;
-    console.log("Updating quantity:", { userId: req.user.id, bookId: req.params.bookId, quantity });
-    if (quantity < 1) {
-      return res.status(400).json({ message: "Quantity must be at least 1" });
+    const { bookId } = req.params;
+    const firebaseId = req.user.id;
+
+    if (!validateObjectId(bookId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid book ID",
+      });
     }
-    const book = await Book.findById(req.params.bookId);
-    if (!book) {
-      return res.status(404).json({ message: "Book not found" });
-    }
-    if (book.quantity < quantity) {
-      return res.status(400).json({ message: "Insufficient stock" });
-    }
-    const cart = await Cart.findOne({ userId: req.user.id });
+
+    const cart = await Cart.findOne({
+      $or: [{ user: req.user.id }, { firebaseId: firebaseId }],
+    });
+
     if (!cart) {
-      return res.status(404).json({ message: "Cart not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Cart not found",
+      });
     }
-    const item = cart.items.find((item) => item.bookId.toString() === req.params.bookId);
-    if (!item) {
-      return res.status(404).json({ message: "Item not in cart" });
-    }
-    item.quantity = quantity;
-    item.price = book.price.newPrice; // Cập nhật giá nếu cần
-    cart.updatedAt = Date.now();
+
+    cart.items = cart.items.filter((item) => item.book.toString() !== bookId);
+
     await cart.save();
-    console.log("Cart after update quantity:", cart);
-    res.status(200).json({ message: "Quantity updated", cart });
+    await cart.populate("items.book");
+
+    res.status(200).json({
+      success: true,
+      data: cart,
+      message: "Item removed from cart successfully",
+    });
   } catch (error) {
-    console.error("Error updating quantity:", error);
-    res.status(500).json({ message: "Server error" });
+    console.error("Remove from cart error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Internal server error",
+    });
   }
 };
 
-module.exports = { getCart, addToCart, clearCart, removeFromCart, updateCartItemQuantity };
+// Clear cart
+exports.clearCart = async (req, res) => {
+  try {
+    const firebaseId = req.user.id;
+
+    const cart = await Cart.findOne({
+      $or: [{ user: req.user.id }, { firebaseId: firebaseId }],
+    });
+
+    if (!cart) {
+      return res.status(404).json({
+        success: false,
+        message: "Cart not found",
+      });
+    }
+
+    cart.items = [];
+    await cart.save();
+
+    res.status(200).json({
+      success: true,
+      data: cart,
+      message: "Cart cleared successfully",
+    });
+  } catch (error) {
+    console.error("Clear cart error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Internal server error",
+    });
+  }
+};

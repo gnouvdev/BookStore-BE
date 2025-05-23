@@ -31,4 +31,62 @@ const bookSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
 });
 
-module.exports = mongoose.model("Book", bookSchema);
+// Create text index for searchable fields
+bookSchema.index(
+  {
+    title: "text",
+    description: "text",
+    tags: "text",
+  },
+  {
+    weights: {
+      title: 10,
+      tags: 5,
+      description: 1,
+    },
+    name: "book_text_search",
+    default_language: "none", // Disable language-specific stemming
+    language_override: "none", // Disable language override
+  }
+);
+
+// Create the model
+const Book = mongoose.model("Book", bookSchema);
+
+// Ensure indexes are created when the application starts
+const createIndexes = async () => {
+  try {
+    // Drop existing text index if it exists
+    await Book.collection.dropIndex("book_text_search").catch(() => {
+      console.log("No existing text index to drop");
+    });
+
+    // Create new text index
+    await Book.collection.createIndex(
+      {
+        title: "text",
+        description: "text",
+        tags: "text",
+      },
+      {
+        weights: {
+          title: 10,
+          tags: 5,
+          description: 1,
+        },
+        name: "book_text_search",
+        default_language: "none",
+        language_override: "none",
+      }
+    );
+    console.log("Text index created successfully");
+  } catch (error) {
+    console.error("Error creating text index:", error);
+    // Don't throw the error, just log it
+  }
+};
+
+// Call createIndexes when the model is initialized
+createIndexes();
+
+module.exports = Book;

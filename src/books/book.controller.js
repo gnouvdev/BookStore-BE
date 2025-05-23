@@ -39,10 +39,64 @@ const postABook = async (req, res) => {
 //get all books
 const getAllBooks = async (req, res) => {
   try {
-    const books = await Book.find()
-      .populate("author", "name") // Lấy tên tác giả
-      .populate("category", "name") // Lấy tên danh mục
-      .sort({ createdAt: -1 });
+    const books = await Book.aggregate([
+      {
+        $lookup: {
+          from: "reviews",
+          localField: "_id",
+          foreignField: "book",
+          as: "reviews",
+        },
+      },
+      {
+        $addFields: {
+          rating: { $avg: "$reviews.rating" },
+          numReviews: { $size: "$reviews" },
+        },
+      },
+      {
+        $lookup: {
+          from: "authors",
+          localField: "author",
+          foreignField: "_id",
+          as: "author",
+        },
+      },
+      {
+        $lookup: {
+          from: "categories",
+          localField: "category",
+          foreignField: "_id",
+          as: "category",
+        },
+      },
+      {
+        $addFields: {
+          author: { $arrayElemAt: ["$author", 0] },
+          category: { $arrayElemAt: ["$category", 0] },
+        },
+      },
+      {
+        $project: {
+          _id: 1,
+          title: 1,
+          description: 1,
+          coverImage: 1,
+          price: 1,
+          quantity: 1,
+          trending: 1,
+          language: 1,
+          tags: 1,
+          publish: 1,
+          createdAt: 1,
+          rating: { $ifNull: ["$rating", 0] },
+          numReviews: { $ifNull: ["$numReviews", 0] },
+          author: { _id: 1, name: 1 },
+          category: { _id: 1, name: 1 },
+        },
+      },
+      { $sort: { createdAt: -1 } },
+    ]);
     res.status(200).json(books);
   } catch (error) {
     console.error("Error fetching books:", error);
@@ -62,18 +116,77 @@ const getSingleBook = async (req, res) => {
       return res.status(400).json({ message: "Book ID is required" });
     }
 
-    const book = await Book.findById(id)
-      .populate("author", "name")
-      .populate("category", "name");
+    const book = await Book.aggregate([
+      {
+        $match: {
+          _id: new mongoose.Types.ObjectId(id),
+        },
+      },
+      {
+        $lookup: {
+          from: "reviews",
+          localField: "_id",
+          foreignField: "book",
+          as: "reviews",
+        },
+      },
+      {
+        $addFields: {
+          rating: { $avg: "$reviews.rating" },
+          numReviews: { $size: "$reviews" },
+        },
+      },
+      {
+        $lookup: {
+          from: "authors",
+          localField: "author",
+          foreignField: "_id",
+          as: "author",
+        },
+      },
+      {
+        $lookup: {
+          from: "categories",
+          localField: "category",
+          foreignField: "_id",
+          as: "category",
+        },
+      },
+      {
+        $addFields: {
+          author: { $arrayElemAt: ["$author", 0] },
+          category: { $arrayElemAt: ["$category", 0] },
+        },
+      },
+      {
+        $project: {
+          _id: 1,
+          title: 1,
+          description: 1,
+          coverImage: 1,
+          price: 1,
+          quantity: 1,
+          trending: 1,
+          language: 1,
+          tags: 1,
+          publish: 1,
+          createdAt: 1,
+          rating: { $ifNull: ["$rating", 0] },
+          numReviews: { $ifNull: ["$numReviews", 0] },
+          author: { _id: 1, name: 1 },
+          category: { _id: 1, name: 1 },
+        },
+      },
+    ]);
 
-    console.log("Book found:", book ? "Yes" : "No");
-    if (!book) {
+    console.log("Book found:", book.length > 0 ? "Yes" : "No");
+    if (!book || book.length === 0) {
       console.log("Error: Book not found");
       return res.status(404).json({ message: "Book not found" });
     }
 
-    console.log("Successfully retrieved book:", book._id);
-    res.status(200).json(book);
+    console.log("Successfully retrieved book:", book[0]._id);
+    res.status(200).json(book[0]);
   } catch (error) {
     console.error("Error in getSingleBook:", error);
     res.status(500).json({ message: "Server error", error: error.message });

@@ -7,6 +7,7 @@ const {
   UpdateBook,
   deleteABook,
   searchBooks,
+  getSearchSuggestions,
 } = require("./book.controller");
 const verifyAdminToken = require("../middleware/verifyAdminToken");
 const router = express.Router();
@@ -24,6 +25,9 @@ router.get("/", getAllBooks);
 
 //search books - must be before /:id route
 router.get("/search", searchBooks);
+
+//search suggestions - must be before /:id route
+router.get("/search/suggestions", getSearchSuggestions);
 
 //get single book
 router.get("/:id", getSingleBook);

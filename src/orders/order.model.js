@@ -40,7 +40,14 @@ const orderSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["pending", "processing", "shipped", "delivered", "completed", "cancelled"],
+      enum: [
+        "pending",
+        "processing",
+        "shipped",
+        "delivered",
+        "completed",
+        "cancelled",
+      ],
       default: "pending",
     },
     paymentStatus: {
@@ -49,17 +56,55 @@ const orderSchema = new mongoose.Schema(
       default: "pending",
     },
     paymentDetails: {
-      transactionId: { type: String, required: function () { return this.paymentStatus === "paid"; } },
-      paymentDate: { type: Date, required: function () { return this.paymentStatus === "paid"; } },
-      paymentAmount: { type: Number, required: function () { return this.paymentStatus === "paid"; } },
+      transactionId: {
+        type: String,
+        required: function () {
+          return this.paymentStatus === "paid";
+        },
+      },
+      paymentDate: {
+        type: Date,
+        required: function () {
+          return this.paymentStatus === "paid";
+        },
+      },
+      paymentAmount: {
+        type: Number,
+        required: function () {
+          return this.paymentStatus === "paid";
+        },
+      },
       paymentCurrency: { type: String, default: "VND" },
     },
   },
   { timestamps: true }
 );
 
+orderSchema.pre("save", async function (next) {
+  if (!this.user) {
+    return next(new Error("Missing user in order"));
+  }
+  const userExists = await mongoose.model("User").exists({ _id: this.user });
+  if (!userExists) {
+    return next(new Error(`Invalid user ID: ${this.user}`));
+  }
+  for (const item of this.productIds) {
+    if (!item.productId) {
+      return next(new Error("Missing productId in order item"));
+    }
+    const bookExists = await mongoose
+      .model("Book")
+      .exists({ _id: item.productId });
+    if (!bookExists) {
+      return next(new Error(`Invalid productId: ${item.productId}`));
+    }
+  }
+  next();
+});
+
 orderSchema.index({ user: 1 });
 orderSchema.index({ status: 1 });
+orderSchema.index({ createdAt: -1 });
 
 const Order = mongoose.model("Order", orderSchema);
 module.exports = Order;

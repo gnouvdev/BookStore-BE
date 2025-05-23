@@ -25,6 +25,7 @@
     "lodash": "^4.17.21",
     "mongoose": "^8.12.1",
     "natural": "^8.0.1",
+    "redis": "^5.1.0",
     "vnpay": "^2.2.0"
   },
   "devDependencies": {
