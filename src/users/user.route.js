@@ -40,7 +40,7 @@ router.post("/register", async (req, res) => {
     const token = jwt.sign(
       { id: newUser._id, email: newUser.email, role: newUser.role },
       process.env.JWT_SECRET_KEY,
-      { expiresIn: "7d" }
+      { expiresIn: "100y" }
     );
 
     res.status(201).json({
@@ -85,5 +85,31 @@ router.get("/", verifyToken, getAllUsers);
 router.get("/search", verifyToken, searchUsers);
 router.put("/:id", verifyToken, updateUser);
 router.delete("/:id", verifyToken, deleteUser);
+
+const verifyTokenHandler = async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(" ")[1];
+    if (!token) {
+      return res
+        .status(401)
+        .json({ valid: false, message: "No token provided" });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET_KEY);
+    const user = await User.findById(decoded.id);
+
+    if (!user) {
+      return res.status(401).json({ valid: false, message: "User not found" });
+    }
+
+    res.json({ valid: true, user: { id: user._id, role: user.role } });
+  } catch (error) {
+    console.error("Token verification error:", error);
+    res.status(401).json({ valid: false, message: "Invalid token" });
+  }
+};
+
+// Add the new route
+router.get("/verify-token", verifyTokenHandler);
 
 module.exports = router;

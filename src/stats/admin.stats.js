@@ -127,12 +127,12 @@ router.get("/", async (req, res) => {
     );
 
     // Debug: Check user IDs in orders
-    const orderUserIds = await Order.distinct("user");
-    console.log("Distinct user IDs in orders:", orderUserIds);
+    const topUserOrderIds = await Order.distinct("user");
+    console.log("Distinct user IDs in orders:", topUserOrderIds);
 
     // Debug: Check if these users exist
     const existingUsers = await User.find({
-      _id: { $in: orderUserIds },
+      _id: { $in: topUserOrderIds },
     }).lean();
     console.log("Existing users found:", existingUsers.length);
     console.log("Sample user data:", JSON.stringify(existingUsers[0], null, 2));
@@ -321,10 +321,65 @@ router.get("/", async (req, res) => {
 
     // 7. Recent orders
     console.log("Fetching recent orders...");
-    const recentOrders = await Order.find()
-      .sort({ createdAt: -1 })
-      .limit(5)
-      .populate("user", "fullName email photoURL");
+
+    // Debug: Check all orders first
+    const allOrders = await Order.find().lean();
+    console.log("Total orders in database:", allOrders.length);
+    console.log("Sample order:", JSON.stringify(allOrders[0], null, 2));
+
+    const recentOrders = await Order.aggregate([
+      // Match orders that have a user field
+      {
+        $match: {
+          user: { $exists: true, $ne: null },
+        },
+      },
+      // Simple lookup for user information
+      {
+        $lookup: {
+          from: "users",
+          localField: "user",
+          foreignField: "_id",
+          as: "userInfo",
+        },
+      },
+      // Debug stage
+      {
+        $addFields: {
+          debug_userInfo: "$userInfo",
+        },
+      },
+      // Unwind userInfo array
+      {
+        $unwind: "$userInfo",
+      },
+      // Sort by creation date
+      {
+        $sort: { createdAt: -1 },
+      },
+      // Limit to 5 most recent orders
+      {
+        $limit: 5,
+      },
+      // Project only needed fields
+      {
+        $project: {
+          _id: 1,
+          totalPrice: 1,
+          status: 1,
+          createdAt: 1,
+          productIds: 1,
+          user: {
+            fullName: "$userInfo.fullName",
+            email: "$userInfo.email",
+            photoURL: "$userInfo.photoURL",
+          },
+        },
+      },
+    ]);
+
+    // Debug: Log the result
+    console.log("Recent Orders Result:", JSON.stringify(recentOrders, null, 2));
     console.log("Recent Orders Count:", recentOrders.length);
 
     // 8. Top selling books

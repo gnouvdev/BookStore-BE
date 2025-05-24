@@ -116,8 +116,11 @@ exports.addToCart = async (req, res) => {
 // Update cart item quantity
 exports.updateCartItem = async (req, res) => {
   try {
-    const { bookId, quantity } = req.body;
+    const bookId = req.params.bookId || req.body.bookId;
+    const { quantity } = req.body;
     const firebaseId = req.user.id;
+
+    console.log("Updating cart item:", { bookId, quantity, firebaseId });
 
     if (!validateObjectId(bookId)) {
       return res.status(400).json({
