@@ -3,6 +3,8 @@ const Author = require("../authors/author.model"); // Import model Author
 const mongoose = require("mongoose");
 const Category = require("../categories/category.model"); // Import model Category
 const { remove: removeDiacritics } = require("diacritics");
+const Order = require("../orders/order.model"); // Import model Order
+const User = require("../users/user.model"); // Import model User
 
 const postABook = async (req, res) => {
   try {
@@ -108,12 +110,16 @@ const getSingleBook = async (req, res) => {
   try {
     const { id } = req.params;
     console.log("Book ID received:", id);
-    console.log("Request params:", req.params);
-    console.log("Request query:", req.query);
 
     if (!id) {
       console.log("Error: No ID provided");
       return res.status(400).json({ message: "Book ID is required" });
+    }
+
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      console.log("Error: Invalid ObjectId format");
+      return res.status(400).json({ message: "Invalid book ID format" });
     }
 
     const book = await Book.aggregate([
@@ -189,7 +195,11 @@ const getSingleBook = async (req, res) => {
     res.status(200).json(book[0]);
   } catch (error) {
     console.error("Error in getSingleBook:", error);
-    res.status(500).json({ message: "Server error", error: error.message });
+    res.status(500).json({
+      message: "Server error",
+      error: error.message,
+      stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
+    });
   }
 };
 // update book
@@ -444,6 +454,295 @@ const getSearchSuggestions = async (req, res) => {
   }
 };
 
+// Get books with statistics and sales data
+const getBooksWithStats = async (req, res) => {
+  try {
+    console.log("Starting getBooksWithStats...");
+    console.log("Request headers:", req.headers);
+    console.log("Request query:", req.query);
+    console.log("Request params:", req.params);
+
+    // Validate models
+    if (!Book || !Order || !User) {
+      console.error("Models not initialized:", {
+        Book: !!Book,
+        Order: !!Order,
+        User: !!User,
+      });
+      return res.status(500).json({
+        success: false,
+        message: "Database models not properly initialized",
+      });
+    }
+
+    // Get books with basic info
+    let books = [];
+    try {
+      console.log("Fetching books...");
+      const bookQuery = Book.find()
+        .select(
+          "title author genre coverImage price quantity rating reviews description tags bestseller newArrival"
+        )
+        .populate({
+          path: "author",
+          select: "name",
+          model: "Author",
+        });
+
+      console.log("Book query constructed:", bookQuery.toString());
+      books = await bookQuery.lean().exec();
+      console.log("Books fetched successfully:", books.length);
+      console.log(
+        "First book sample:",
+        books[0]
+          ? {
+              id: books[0]._id,
+              title: books[0].title,
+              author: books[0].author,
+            }
+          : "No books found"
+      );
+    } catch (bookError) {
+      console.error("Error fetching books:", bookError);
+      console.error("Error stack:", bookError.stack);
+      return res.status(500).json({
+        success: false,
+        message: "Error fetching books",
+        error: bookError.message,
+        stack:
+          process.env.NODE_ENV === "development" ? bookError.stack : undefined,
+      });
+    }
+
+    // Initialize statistics with default values
+    const statistics = {
+      totalBooks: 0,
+      totalOrders: 0,
+      totalCustomers: 0,
+      totalSales: 0,
+    };
+
+    // Get total statistics with error handling
+    try {
+      console.log("Fetching statistics...");
+      const [totalBooks, totalOrders, totalCustomers] = await Promise.all([
+        Book.countDocuments().exec(),
+        Order.countDocuments().exec(),
+        User.countDocuments().exec(),
+      ]);
+
+      statistics.totalBooks = totalBooks || 0;
+      statistics.totalOrders = totalOrders || 0;
+      statistics.totalCustomers = totalCustomers || 0;
+
+      console.log("Basic statistics fetched:", statistics);
+
+      const salesResult = await Order.aggregate([
+        { $match: { status: "completed" } },
+        { $group: { _id: null, total: { $sum: "$totalAmount" } } },
+      ]).exec();
+
+      statistics.totalSales = salesResult[0]?.total || 0;
+      console.log("Sales statistics fetched:", statistics.totalSales);
+    } catch (statsError) {
+      console.error("Error getting statistics:", statsError);
+      console.error("Stats error stack:", statsError.stack);
+      // Continue with default values instead of returning error
+    }
+
+    // Get genre statistics with error handling
+    let genreStats = [];
+    try {
+      console.log("Fetching genre statistics...");
+      const genrePipeline = [
+        {
+          $group: {
+            _id: { $ifNull: ["$genre", "Uncategorized"] },
+            count: { $sum: 1 },
+            sales: { $sum: { $ifNull: ["$quantity", 0] } },
+          },
+        },
+        { $sort: { count: -1 } },
+      ];
+      console.log("Genre pipeline:", JSON.stringify(genrePipeline, null, 2));
+
+      genreStats = await Book.aggregate(genrePipeline).exec();
+      console.log("Genre statistics fetched:", genreStats.length);
+      console.log("Genre stats sample:", genreStats.slice(0, 2));
+    } catch (genreError) {
+      console.error("Error getting genre statistics:", genreError);
+      console.error("Genre error stack:", genreError.stack);
+      genreStats = [];
+    }
+
+    // Get bestseller books with error handling
+    let bestsellers = [];
+    try {
+      console.log("Fetching bestsellers...");
+      const bestsellerQuery = Book.find({ bestseller: true })
+        .select("title author genre coverImage price quantity rating reviews")
+        .populate({
+          path: "author",
+          select: "name",
+          model: "Author",
+        })
+        .limit(6);
+
+      console.log("Bestseller query constructed:", bestsellerQuery.toString());
+      bestsellers = await bestsellerQuery.lean().exec();
+      console.log("Bestsellers fetched:", bestsellers.length);
+      console.log(
+        "Bestseller sample:",
+        bestsellers[0]
+          ? {
+              id: bestsellers[0]._id,
+              title: bestsellers[0].title,
+              author: bestsellers[0].author,
+            }
+          : "No bestsellers found"
+      );
+    } catch (bestsellerError) {
+      console.error("Error getting bestsellers:", bestsellerError);
+      console.error("Bestseller error stack:", bestsellerError.stack);
+      bestsellers = [];
+    }
+
+    // Prepare response data
+    const responseData = {
+      success: true,
+      data: {
+        books: books || [],
+        statistics: statistics || {},
+        genreStats: genreStats || [],
+        bestsellers: bestsellers || [],
+      },
+    };
+
+    console.log("Sending response with data:", {
+      booksCount: books.length,
+      genreStatsCount: genreStats.length,
+      bestsellersCount: bestsellers.length,
+      statistics: statistics,
+    });
+
+    res.status(200).json(responseData);
+  } catch (error) {
+    console.error("Error in getBooksWithStats:", error);
+    console.error("Error stack:", error.stack);
+    console.error("Error details:", {
+      name: error.name,
+      message: error.message,
+      code: error.code,
+    });
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch books with statistics",
+      error: error.message,
+      stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
+    });
+  }
+};
+
+// Get book sales by genre
+const getBookSalesByGenre = async (req, res) => {
+  try {
+    console.log("Starting getBookSalesByGenre...");
+
+    // Validate models
+    if (!Book || !Order) {
+      console.error("Models not initialized:", {
+        Book: !!Book,
+        Order: !!Order,
+      });
+      return res.status(500).json({
+        success: false,
+        message: "Database models not properly initialized",
+      });
+    }
+
+    // Get sales by genre with error handling
+    let salesByGenre = [];
+    try {
+      console.log("Fetching sales by genre...");
+      salesByGenre = await Order.aggregate([
+        { $match: { status: "completed" } },
+        { $unwind: "$items" },
+        {
+          $lookup: {
+            from: "books",
+            localField: "items.book",
+            foreignField: "_id",
+            as: "bookDetails",
+          },
+        },
+        { $unwind: "$bookDetails" },
+        {
+          $lookup: {
+            from: "categories",
+            localField: "bookDetails.category",
+            foreignField: "_id",
+            as: "categoryDetails",
+          },
+        },
+        { $unwind: "$categoryDetails" },
+        {
+          $group: {
+            _id: "$categoryDetails.name",
+            totalSales: { $sum: "$items.quantity" },
+            revenue: {
+              $sum: { $multiply: ["$items.price", "$items.quantity"] },
+            },
+          },
+        },
+        { $sort: { totalSales: -1 } },
+      ]).exec();
+
+      console.log("Sales by genre fetched:", salesByGenre.length);
+      console.log("Sample sales data:", salesByGenre.slice(0, 2));
+    } catch (error) {
+      console.error("Error getting sales by genre:", error);
+      console.error("Error stack:", error.stack);
+      return res.status(500).json({
+        success: false,
+        message: "Error fetching sales by genre",
+        error: error.message,
+      });
+    }
+
+    // Prepare response data
+    const responseData = {
+      success: true,
+      data: salesByGenre.map((stat) => ({
+        _id: stat._id || "Uncategorized",
+        totalSales: stat.totalSales || 0,
+        revenue: stat.revenue || 0,
+      })),
+    };
+
+    console.log("Sending response with data:", {
+      statsCount: responseData.data.length,
+    });
+
+    res.status(200).json(responseData);
+  } catch (error) {
+    console.error("Error in getBookSalesByGenre:", error);
+    console.error("Error stack:", error.stack);
+    console.error("Error details:", {
+      name: error.name,
+      message: error.message,
+      code: error.code,
+    });
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch sales by genre",
+      error: error.message,
+      stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
+    });
+  }
+};
+
 module.exports = {
   postABook,
   getAllBooks,
@@ -452,4 +751,6 @@ module.exports = {
   deleteABook,
   searchBooks,
   getSearchSuggestions,
+  getBooksWithStats,
+  getBookSalesByGenre,
 };

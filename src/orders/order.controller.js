@@ -1,4 +1,7 @@
 const Order = require("./order.model");
+const {
+  createNotification,
+} = require("../notifications/notification.controller");
 
 const createAOrder = async (req, res) => {
   try {
@@ -66,16 +69,49 @@ const getOrderByEmail = async (req, res) => {
 
 const updateOrderStatus = async (req, res) => {
   try {
-    console.log("Updating order status:", {
-      id: req.params.id,
-      status: req.body.status,
-    });
-    const order = await Order.findByIdAndUpdate(
-      req.params.id,
-      { status: req.body.status },
-      { new: true }
-    );
-    console.log("Updated order:", order);
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (!status) {
+      return res.status(400).json({
+        success: false,
+        message: "Status is required",
+      });
+    }
+
+    const order = await Order.findById(id)
+      .populate("productIds.productId")
+      .populate("paymentMethod");
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    // Update order status
+    order.status = status;
+    await order.save();
+
+    // Create notification for the user
+    if (order.user) {
+      await createNotification(
+        order.user,
+        `Đơn hàng #${order._id} đã được cập nhật: ${status}`,
+        "order",
+        { orderId: order._id, status }
+      );
+
+      // Emit socket event
+      if (req.app.get("io")) {
+        req.app.get("io").emit("orderStatusUpdate", {
+          orderId: order._id,
+          status,
+          userId: order.user.toString(),
+        });
+      }
+    }
 
     res.status(200).json({
       success: true,

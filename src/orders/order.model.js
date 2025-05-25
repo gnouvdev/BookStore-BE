@@ -88,16 +88,23 @@ orderSchema.pre("save", async function (next) {
   if (!userExists) {
     return next(new Error(`Invalid user ID: ${this.user}`));
   }
+
   for (const item of this.productIds) {
     if (!item.productId) {
       return next(new Error("Missing productId in order item"));
     }
-    const bookExists = await mongoose
-      .model("Book")
-      .exists({ _id: item.productId });
-    if (!bookExists) {
+
+    const book = await mongoose.model("Book").findById(item.productId);
+    if (!book) {
       return next(new Error(`Invalid productId: ${item.productId}`));
     }
+
+    if (book.quantity < item.quantity) {
+      return next(new Error(`Insufficient stock for book: ${book.title}`));
+    }
+
+    book.quantity -= item.quantity;
+    await book.save();
   }
   next();
 });

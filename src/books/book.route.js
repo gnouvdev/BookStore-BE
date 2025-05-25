@@ -8,6 +8,8 @@ const {
   deleteABook,
   searchBooks,
   getSearchSuggestions,
+  getBooksWithStats,
+  getBookSalesByGenre,
 } = require("./book.controller");
 const verifyAdminToken = require("../middleware/verifyAdminToken");
 const router = express.Router();
@@ -61,5 +63,11 @@ router.put("/edit/:id", verifyAdminToken, UpdateBook);
 
 //delete book
 router.delete("/:id", verifyAdminToken, deleteABook);
+
+//get books with stats
+router.get("/stats", getBooksWithStats);
+
+//get book sales by genre
+router.get("/sales-by-genre", getBookSalesByGenre);
 
 module.exports = router;
