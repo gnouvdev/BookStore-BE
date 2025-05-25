@@ -1,6 +1,7 @@
 const jwt = require("jsonwebtoken");
+const User = require("../users/user.model");
 
-const verifyToken = (req, res, next) => {
+const verifyToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   console.log("Auth header received:", authHeader || "Missing");
 
@@ -28,7 +29,22 @@ const verifyToken = (req, res, next) => {
         .status(401)
         .json({ message: "Invalid token: Missing user ID" });
     }
-    req.user = decoded;
+
+    // Get user from database to get firebaseId
+    const user = await User.findById(decoded.id);
+    if (!user) {
+      console.log("User not found in database");
+      return res.status(401).json({ message: "User not found" });
+    }
+
+    // Set user data in request
+    req.user = {
+      id: user._id,
+      firebaseId: user.firebaseId,
+      email: user.email,
+      role: user.role,
+    };
+
     console.log("req.user set:", req.user);
     next();
   } catch (error) {

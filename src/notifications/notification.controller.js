@@ -3,11 +3,17 @@ const Notification = require("./notification.model");
 // Get all notifications for a user
 const getNotifications = async (req, res) => {
   try {
-    const notifications = await Notification.find({ userId: req.user._id })
+    console.log("Getting notifications for user:", req.user.firebaseId);
+    const notifications = await Notification.find({
+      userId: req.user.firebaseId,
+    })
       .sort({ createdAt: -1 })
       .limit(50);
+
+    console.log("Found notifications:", notifications);
     res.status(200).json({ data: notifications });
   } catch (error) {
+    console.error("Error getting notifications:", error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -16,7 +22,7 @@ const getNotifications = async (req, res) => {
 const markAsRead = async (req, res) => {
   try {
     const notification = await Notification.findOneAndUpdate(
-      { _id: req.params.id, userId: req.user._id },
+      { _id: req.params.id, userId: req.user.firebaseId },
       { isRead: true },
       { new: true }
     );
@@ -25,6 +31,7 @@ const markAsRead = async (req, res) => {
     }
     res.status(200).json({ data: notification });
   } catch (error) {
+    console.error("Error marking notification as read:", error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -33,34 +40,32 @@ const markAsRead = async (req, res) => {
 const markAllAsRead = async (req, res) => {
   try {
     await Notification.updateMany(
-      { userId: req.user._id, isRead: false },
+      { userId: req.user.firebaseId, isRead: false },
       { isRead: true }
     );
     res.status(200).json({ message: "All notifications marked as read" });
   } catch (error) {
+    console.error("Error marking all notifications as read:", error);
     res.status(500).json({ message: error.message });
   }
 };
 
 // Create a new notification
-const createNotification = async (
-  userId,
-  message,
-  type = "system",
-  data = {}
-) => {
+const createNotification = async (userId, message, type, metadata) => {
   try {
+    console.log("Creating notification with userId:", userId);
     const notification = new Notification({
       userId,
       message,
       type,
-      data,
+      data: metadata,
     });
     await notification.save();
+    console.log("Notification created:", notification);
     return notification;
   } catch (error) {
     console.error("Error creating notification:", error);
-    return null;
+    throw error;
   }
 };
 
