@@ -13,6 +13,7 @@ const {
   searchUsers,
   updateUser,
   deleteUser,
+  getAdmin,
 } = require("./user.controller");
 const verifyToken = require("../middleware/verifyToken");
 const jwt = require("jsonwebtoken");
@@ -85,6 +86,9 @@ router.get("/", verifyToken, getAllUsers);
 router.get("/search", verifyToken, searchUsers);
 router.put("/:id", verifyToken, updateUser);
 router.delete("/:id", verifyToken, deleteUser);
+
+// Lấy thông tin admin
+router.get("/admin", verifyToken, getAdmin);
 
 const verifyTokenHandler = async (req, res) => {
   try {

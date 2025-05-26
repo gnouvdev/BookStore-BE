@@ -40,6 +40,17 @@ const initializeSocket = (server) => {
       socket.join(userId);
     });
 
+    // Xử lý sự kiện chat
+    socket.on("joinChat", (userId) => {
+      socket.join(`chat:${userId}`);
+      console.log(`User ${socket.userId} joined chat room with ${userId}`);
+    });
+
+    socket.on("leaveChat", (userId) => {
+      socket.leave(`chat:${userId}`);
+      console.log(`User ${socket.userId} left chat room with ${userId}`);
+    });
+
     // Xử lý sự kiện ngắt kết nối
     socket.on("disconnect", () => {
       console.log("User disconnected:", socket.id);

@@ -319,6 +319,38 @@ const deleteUser = async (req, res) => {
   }
 };
 
+const getAdmin = async (req, res) => {
+  try {
+    // Tìm admin và chọn tất cả các trường cần thiết
+    const admin = await User.findOne({ role: "admin" }).select(
+      "firebaseId role email fullName _id"
+    );
+
+    if (!admin) {
+      console.log("No admin found in database");
+      return res.status(404).json({ message: "Admin not found" });
+    }
+
+    // Nếu admin không có firebaseId, tạo một firebaseId mới
+    if (!admin.firebaseId) {
+      console.log("Admin found but no firebaseId, creating new one");
+      admin.firebaseId = `admin_${admin._id}`;
+      await admin.save();
+    }
+
+    console.log("Found admin with firebaseId:", admin.firebaseId);
+    res.status(200).json({
+      data: {
+        ...admin.toObject(),
+        firebaseId: admin.firebaseId,
+      },
+    });
+  } catch (error) {
+    console.error("Error getting admin:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
 module.exports = {
   register,
   login,
@@ -331,4 +363,5 @@ module.exports = {
   searchUsers,
   updateUser,
   deleteUser,
+  getAdmin,
 };

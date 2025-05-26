@@ -96,6 +96,7 @@ const recommendationv2Routes = require("./src/recommendationv2/recommendationv2.
 const viewHistoryRoutes = require("./src/viewHistory/viewHistory.routes");
 const searchHistoryRoutes = require("./src/searchHistory/searchHistory.routes");
 const notificationRoutes = require("./src/notifications/notification.route");
+const chatRoutes = require("./src/chat/chat.route");
 
 app.use("/api/books", bookRoutes);
 app.use("/api/orders", orderRoutes);
@@ -112,6 +113,7 @@ app.use("/api/recommendationv2", recommendationv2Routes);
 app.use("/api/viewHistory", viewHistoryRoutes);
 app.use("/api/searchHistory", searchHistoryRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/chat", chatRoutes);
 
 // Test route
 app.get("/", (req, res) => {
