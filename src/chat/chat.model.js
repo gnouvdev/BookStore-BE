@@ -23,6 +23,11 @@ const chatSchema = new mongoose.Schema(
       enum: ["user", "admin"],
       required: true,
     },
+    receiverRole: {
+      type: String,
+      enum: ["user", "admin"],
+      required: true,
+    },
   },
   {
     timestamps: true,
@@ -31,5 +36,6 @@ const chatSchema = new mongoose.Schema(
 
 // Index để tối ưu truy vấn
 chatSchema.index({ senderId: 1, receiverId: 1, createdAt: -1 });
+chatSchema.index({ senderRole: 1, receiverRole: 1 });
 
 module.exports = mongoose.model("Chat", chatSchema);

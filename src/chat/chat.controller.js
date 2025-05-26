@@ -8,24 +8,48 @@ const getChatHistory = async (req, res) => {
     const currentUserId = req.user.firebaseId;
     const currentUserRole = req.user.role;
 
-    const messages = await Chat.find({
-      $or: [
-        { senderId: currentUserId, receiverId: userId },
-        { senderId: userId, receiverId: currentUserId },
-      ],
-    })
-      .sort({ createdAt: 1 })
-      .limit(50);
+    console.log("Getting chat history:", {
+      userId,
+      currentUserId,
+      currentUserRole,
+    });
+
+    // Xử lý đặc biệt cho chat với admin
+    const isAdminChat = userId === "admin";
+    const query = isAdminChat
+      ? {
+          $or: [
+            { senderId: currentUserId, receiverId: "admin" },
+            { senderId: "admin", receiverId: currentUserId },
+          ],
+        }
+      : {
+          $or: [
+            { senderId: currentUserId, receiverId: userId },
+            { senderId: userId, receiverId: currentUserId },
+          ],
+        };
+
+    console.log("Chat query:", query);
+
+    const messages = await Chat.find(query).sort({ createdAt: 1 }).limit(50);
+
+    console.log("Found messages:", messages.length);
 
     // Đánh dấu tin nhắn chưa đọc là đã đọc
-    await Chat.updateMany(
-      {
-        senderId: userId,
-        receiverId: currentUserId,
-        isRead: false,
-      },
-      { isRead: true }
-    );
+    const updateQuery = isAdminChat
+      ? {
+          senderId: "admin",
+          receiverId: currentUserId,
+          isRead: false,
+        }
+      : {
+          senderId: userId,
+          receiverId: currentUserId,
+          isRead: false,
+        };
+
+    await Chat.updateMany(updateQuery, { isRead: true });
 
     res.status(200).json({ data: messages });
   } catch (error) {
@@ -61,32 +85,49 @@ const sendMessage = async (req, res) => {
       });
     }
 
+    // Nếu gửi tin nhắn đến admin, sử dụng ID cố định cho admin
+    const actualReceiverId = receiverId === "admin" ? "admin" : receiverId;
+    const actualReceiverRole = receiverId === "admin" ? "admin" : "user";
+
     const newMessage = new Chat({
       senderId,
-      receiverId,
+      receiverId: actualReceiverId,
       message,
       senderRole,
+      receiverRole: actualReceiverRole, // Thêm receiverRole
     });
 
     console.log("Creating new message:", newMessage);
 
-    await newMessage.save();
+    const savedMessage = await newMessage.save();
+    console.log("Message saved:", savedMessage);
 
     // Gửi tin nhắn qua socket
     const io = req.app.get("io");
     if (!io) {
       console.error("Socket.io instance not found");
-      // Vẫn trả về thành công vì tin nhắn đã được lưu
-      return res.status(201).json({ data: newMessage });
+      return res.status(201).json({ data: savedMessage });
     }
 
-    io.to(`chat:${receiverId}`).emit("newMessage", {
-      message: newMessage,
+    // Gửi tin nhắn đến cả người gửi và người nhận
+    const senderRoom = `chat:${senderId}`;
+    const receiverRoom = `chat:${actualReceiverId}`;
+
+    console.log("Emitting to rooms:", { senderRoom, receiverRoom });
+
+    // Gửi tin nhắn đến phòng của người nhận
+    io.to(receiverRoom).emit("newMessage", {
+      message: savedMessage,
     });
 
-    console.log("Message saved and emitted successfully");
+    // Gửi tin nhắn đến phòng của người gửi (để cập nhật UI ngay lập tức)
+    io.to(senderRoom).emit("newMessage", {
+      message: savedMessage,
+    });
 
-    res.status(201).json({ data: newMessage });
+    console.log("Message emitted successfully to both rooms");
+
+    res.status(201).json({ data: savedMessage });
   } catch (error) {
     console.error("Error sending message:", error);
     console.error("Error details:", {

@@ -209,8 +209,10 @@ exports.getCollaborativeRecommendations = async (req, res) => {
     console.log("Number of allOrders:", allOrders.length);
     if (allOrders.length > 0) {
       console.log(
-        "Sample allOrders productIds structure:",
-        allOrders[0].productIds
+        "Sample allOrders products:",
+        allOrders[0].productIds.map(
+          (item) => item.productId?.title || "Unknown Product"
+        )
       );
     } else {
       console.log(

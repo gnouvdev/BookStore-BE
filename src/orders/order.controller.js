@@ -57,19 +57,41 @@ const createAOrder = async (req, res) => {
 
 const getOrderByEmail = async (req, res) => {
   try {
-    console.log("Getting orders for email:", req.params.email);
-    const orders = await Order.find({ email: req.params.email })
+    console.log("Getting orders for user:", {
+      id: req.user.id,
+      email: req.user.email,
+    });
+
+    const orders = await Order.find({
+      $or: [{ user: req.user.id }, { "user.firebaseId": req.user.firebaseId }],
+    })
       .populate("productIds.productId")
       .populate("paymentMethod")
+      .populate({
+        path: "user",
+        select: "_id firebaseId email",
+      })
       .lean();
-    console.log("Found orders:", orders);
+
+    // Simplified logging
+    console.log(
+      "Found orders:",
+      orders.map((order) => ({
+        orderId: order._id,
+        userEmail: order.user?.email,
+        status: order.status,
+        products: order.productIds?.map(
+          (item) => item.productId?.title || "Unknown Product"
+        ),
+      }))
+    );
 
     res.status(200).json({
       success: true,
       data: orders,
     });
   } catch (error) {
-    console.error("Error getting orders:", error);
+    console.error("Error getting orders:", error.message);
     res.status(500).json({
       success: false,
       message: "Error getting orders",
@@ -87,10 +109,20 @@ const updateOrderStatus = async (req, res) => {
       return res.status(400).json({ message: "Status is required" });
     }
 
-    console.log("Admin updating order:", id);
-    console.log("Admin user ID:", req.user?.id);
+    console.log("Admin updating order:", {
+      orderId: id,
+      newStatus: status,
+      adminId: req.user?.id,
+    });
 
-    const order = await Order.findById(id)
+    const order = await Order.findByIdAndUpdate(
+      id,
+      { $set: { status } },
+      {
+        new: true,
+        runValidators: true,
+      }
+    )
       .populate({
         path: "user",
         select: "_id firebaseId email",
@@ -102,21 +134,18 @@ const updateOrderStatus = async (req, res) => {
       return res.status(404).json({ message: "Order not found" });
     }
 
-    console.log("Order details:", {
+    // Simplified logging
+    console.log("Order updated:", {
       orderId: order._id,
-      orderUser: {
-        _id: order.user?._id,
-        firebaseId: order.user?.firebaseId,
-        email: order.user?.email,
-      },
-      orderStatus: order.status,
+      userEmail: order.user?.email,
+      oldStatus: order.status,
+      newStatus: status,
+      products: order.productIds?.map(
+        (item) => item.productId?.title || "Unknown Product"
+      ),
     });
 
-    order.status = status;
-    await order.save();
-
     if (order.user) {
-      // Use Firebase ID for notification
       const notificationUserId = order.user.firebaseId;
       console.log("Creating notification for user:", notificationUserId);
 
@@ -127,51 +156,29 @@ const updateOrderStatus = async (req, res) => {
         { orderId: order._id, status }
       );
 
-      console.log("Notification created:", {
+      // Simplified notification logging
+      console.log("Notification sent:", {
         notificationId: notification._id,
         userId: notification.userId,
         message: notification.message,
       });
 
-      // Get socket instance
       const io = req.app.get("io");
-      if (io) {
-        console.log("Socket user ID for notification:", notificationUserId);
-
-        if (notificationUserId) {
-          // Emit to specific user's room
-          io.to(notificationUserId).emit("orderStatusUpdate", {
-            notificationId: notification._id,
-            message: `Đơn hàng #${order._id} đã được cập nhật: ${status}`,
-            orderId: order._id,
-            status,
-            userId: notificationUserId,
-            createdAt: notification.createdAt,
-          });
-          console.log(`Socket notification sent to user ${notificationUserId}`);
-
-          // Also emit to all connected clients for debugging
-          io.emit("debug", {
-            type: "orderStatusUpdate",
-            message: `Order ${order._id} status updated to ${status}`,
-            userId: notificationUserId,
-            timestamp: new Date(),
-          });
-        } else {
-          console.log(
-            "No Firebase ID found for user, skipping socket notification"
-          );
-        }
-      } else {
-        console.log("Socket.io instance not found");
+      if (io && notificationUserId) {
+        io.to(notificationUserId).emit("orderStatusUpdate", {
+          notificationId: notification._id,
+          message: `Đơn hàng #${order._id} đã được cập nhật: ${status}`,
+          orderId: order._id,
+          status,
+          userId: notificationUserId,
+          createdAt: notification.createdAt,
+        });
       }
-    } else {
-      console.log("No user associated with order:", order._id);
     }
 
     res.status(200).json({ success: true, data: order });
   } catch (error) {
-    console.error("Error updating order status:", error);
+    console.error("Error updating order status:", error.message);
     res.status(500).json({ message: "Error updating order status" });
   }
 };
@@ -242,8 +249,14 @@ const deleteOrder = async (req, res) => {
 const getOrderById = async (req, res) => {
   try {
     const { id } = req.params;
-    console.log("Getting order details for ID:", id);
-    console.log("User requesting order:", req.user);
+    console.log("Getting order details:", {
+      orderId: id,
+      requestUser: {
+        id: req.user.id,
+        email: req.user.email,
+        role: req.user.role,
+      },
+    });
 
     const order = await Order.findById(id)
       .populate("productIds.productId")
@@ -254,48 +267,55 @@ const getOrderById = async (req, res) => {
       });
 
     if (!order) {
+      console.log("Order not found:", id);
       return res.status(404).json({
         success: false,
         message: "Order not found",
       });
     }
 
-    // Check if the user is authorized to view this order
-    // Allow access if user is admin or if the order belongs to the user
+    // Simplified logging
+    console.log("Found order:", {
+      orderId: order._id,
+      userEmail: order.user?.email,
+      status: order.status,
+      products: order.productIds?.map(
+        (item) => item.productId?.title || "Unknown Product"
+      ),
+    });
+
     const isAdmin = req.user.role === "admin";
     const isOrderOwner =
       order.user &&
       (order.user._id.toString() === req.user.id ||
-        order.user.firebaseId === req.user.firebaseId);
+        order.user.firebaseId === req.user.firebaseId ||
+        order.user.email === req.user.email);
 
-    console.log("Authorization check:", {
+    // Simplified authorization logging
+    console.log("Access check:", {
       isAdmin,
       isOrderOwner,
-      orderUserId: order.user?._id?.toString(),
-      requestUserId: req.user.id,
-      orderUserFirebaseId: order.user?.firebaseId,
-      requestUserFirebaseId: req.user.firebaseId,
+      requestUserEmail: req.user.email,
+      orderUserEmail: order.user?.email,
     });
 
     if (!isAdmin && !isOrderOwner) {
+      const errorMessage =
+        order.user?.email === "adm@gmail.com"
+          ? "Không thể xem đơn hàng của quản trị viên"
+          : "Bạn không có quyền xem đơn hàng này";
       return res.status(403).json({
         success: false,
-        message: "Not authorized to view this order",
+        message: errorMessage,
       });
     }
-
-    console.log("Found order:", {
-      orderId: order._id,
-      userId: order.user?._id?.toString(),
-      status: order.status,
-    });
 
     res.status(200).json({
       success: true,
       data: order,
     });
   } catch (error) {
-    console.error("Error getting order details:", error);
+    console.error("Error getting order details:", error.message);
     res.status(500).json({
       success: false,
       message: "Error getting order details",

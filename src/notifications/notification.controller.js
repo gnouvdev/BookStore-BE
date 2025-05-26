@@ -53,7 +53,7 @@ const markAllAsRead = async (req, res) => {
 // Create a new notification
 const createNotification = async (userId, message, type, metadata) => {
   try {
-    console.log("Creating notification with userId:", userId);
+    // console.log("Creating notification with userId:", userId);
     const notification = new Notification({
       userId,
       message,
@@ -61,7 +61,7 @@ const createNotification = async (userId, message, type, metadata) => {
       data: metadata,
     });
     await notification.save();
-    console.log("Notification created:", notification);
+    // console.log("Notification created:", notification);
     return notification;
   } catch (error) {
     console.error("Error creating notification:", error);
