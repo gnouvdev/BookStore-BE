@@ -1,112 +1,172 @@
-const admin = require("firebase-admin");
 const jwt = require("jsonwebtoken");
 const User = require("../users/user.model");
+const admin = require("./firebaseAdmin");
 
-// Khởi tạo Firebase Admin SDK
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert({
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-    }),
-  });
-}
+const generateToken = (user) => {
+  return jwt.sign(
+    {
+      id: user._id,
+      email: user.email,
+      role: user.role,
+    },
+    process.env.JWT_SECRET_KEY,
+    {
+      expiresIn: "7d",
+    }
+  );
+};
 
-const loginWithFirebase = async (req, res) => {
-  const { idToken } = req.body;
-
+const login = async (req, res) => {
   try {
-    // Xác minh Firebase idToken
-    const decodedToken = await admin.auth().verifyIdToken(idToken);
-    const firebaseId = decodedToken.uid;
-    const email = decodedToken.email;
-    const photoURL = decodedToken.picture || "https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&f=y";
+    const { idToken, email, uid, displayName, photoURL } = req.body;
+    console.log("Login attempt:", { email, uid });
 
-    // Tìm hoặc tạo user trong MongoDB
-    let user = await User.findOne({ firebaseId });
+    if (!idToken || !email || !uid) {
+      console.log("Missing required fields:", {
+        idToken: !!idToken,
+        email: !!email,
+        uid: !!uid,
+      });
+      return res.status(400).json({ message: "Missing required fields" });
+    }
+
+    // Verify Firebase token
+    try {
+      const decodedToken = await admin.auth().verifyIdToken(idToken);
+      console.log("Firebase token verified:", {
+        uid: decodedToken.uid,
+        email: decodedToken.email,
+        emailVerified: decodedToken.email_verified,
+      });
+
+      if (decodedToken.uid !== uid) {
+        console.log("Token UID mismatch:", {
+          tokenUid: decodedToken.uid,
+          providedUid: uid,
+        });
+        return res.status(401).json({ message: "Invalid token" });
+      }
+    } catch (error) {
+      console.error("Firebase token verification failed:", error);
+      return res.status(401).json({ message: "Invalid Firebase token" });
+    }
+
+    // Find or create user
+    let user = await User.findOne({ email });
+    console.log("User lookup result:", user ? "Found" : "Not found");
+
     if (!user) {
-      user = new User({
-        firebaseId,
+      console.log("Creating new user");
+      user = await User.create({
         email,
-        photoURL,
+        firebaseId: uid,
+        fullName: displayName || email.split("@")[0],
+        avatar: photoURL,
         role: "user",
       });
+      console.log("New user created:", { id: user._id, email: user.email });
+    } else if (user.firebaseId !== uid) {
+      console.log("Updating user's Firebase ID");
+      user.firebaseId = uid;
       await user.save();
     }
 
-    // Tạo JWT
-    const jwtToken = jwt.sign(
-      { id: user._id, email: user.email, role: user.role },
-      process.env.JWT_SECRET_KEY,
-      { expiresIn: "1d", algorithm: "HS256" }
-    );
+    // Generate JWT token
+    const token = generateToken(user);
+    console.log("JWT token generated for user:", {
+      id: user._id,
+      email: user.email,
+    });
 
-    res.status(200).json({
-      message: "Login successful",
-      token: jwtToken,
-      role: user.role,
+    res.json({
+      token,
       user: {
         id: user._id,
         email: user.email,
         fullName: user.fullName,
-        photoURL: user.photoURL,
-        role: user.role
-      }
+        role: user.role,
+        avatar: user.avatar,
+      },
     });
   } catch (error) {
-    console.error("Firebase login error:", error);
-    res.status(401).json({ message: "Invalid Firebase token" });
+    console.error("Login error:", error);
+    res.status(500).json({ message: "Login failed", error: error.message });
   }
 };
 
-const googleLogin = async (req, res) => {
-  const { idToken } = req.body;
-
+const register = async (req, res) => {
   try {
-    const decodedToken = await admin.auth().verifyIdToken(idToken);
-    const firebaseId = decodedToken.uid;
-    const email = decodedToken.email;
-    const fullName = decodedToken.name || "";
-    const photoURL = decodedToken.picture || "https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&f=y";
+    const { idToken, email, fullName } = req.body;
+    console.log("Register attempt:", { email, fullName });
 
-    let user = await User.findOne({ firebaseId });
-    if (!user) {
-      user = new User({
-        firebaseId,
-        email,
-        fullName,
-        photoURL,
-        role: "user",
+    if (!idToken || !email) {
+      console.log("Missing required fields:", {
+        idToken: !!idToken,
+        email: !!email,
       });
-      await user.save();
+      return res.status(400).json({ message: "Missing required fields" });
     }
 
-    const jwtToken = jwt.sign(
-      { id: user._id, email: user.email, role: user.role },
-      process.env.JWT_SECRET_KEY,
-      { expiresIn: "1d", algorithm: "HS256" }
-    );
+    // Verify Firebase token
+    try {
+      const decodedToken = await admin.auth().verifyIdToken(idToken);
+      console.log("Firebase token verified:", {
+        uid: decodedToken.uid,
+        email: decodedToken.email,
+        emailVerified: decodedToken.email_verified,
+      });
 
-    res.status(200).json({
-      message: "Google login successful",
-      token: jwtToken,
-      role: user.role,
-      user: {
-        id: user._id,
-        email: user.email,
-        fullName: user.fullName,
-        photoURL: user.photoURL,
-        role: user.role
+      // Check if user already exists
+      const existingUser = await User.findOne({
+        $or: [{ email: decodedToken.email }, { firebaseId: decodedToken.uid }],
+      });
+
+      if (existingUser) {
+        console.log("User already exists:", {
+          id: existingUser._id,
+          email: existingUser.email,
+          firebaseId: existingUser.firebaseId,
+        });
+        return res.status(400).json({ message: "User already exists" });
       }
-    });
+
+      // Create new user
+      const user = await User.create({
+        email: decodedToken.email,
+        firebaseId: decodedToken.uid,
+        fullName: fullName || decodedToken.email.split("@")[0],
+        role: "user",
+      });
+
+      console.log("New user created:", { id: user._id, email: user.email });
+
+      // Generate JWT token
+      const token = generateToken(user);
+      console.log("JWT token generated for new user");
+
+      res.status(201).json({
+        token,
+        user: {
+          id: user._id,
+          email: user.email,
+          fullName: user.fullName,
+          role: user.role,
+          avatar: user.avatar,
+        },
+      });
+    } catch (error) {
+      console.error("Firebase token verification failed:", error);
+      return res.status(401).json({ message: "Invalid Firebase token" });
+    }
   } catch (error) {
-    console.error("Google login error:", error);
-    res.status(401).json({ message: "Invalid Google token" });
+    console.error("Registration error:", error);
+    res
+      .status(500)
+      .json({ message: "Registration failed", error: error.message });
   }
 };
 
 module.exports = {
-  loginWithFirebase,
-  googleLogin,
+  login,
+  register,
 };

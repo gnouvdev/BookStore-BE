@@ -1,8 +1,9 @@
 const express = require("express");
 const router = express.Router();
-const { loginWithFirebase, googleLogin } = require("./auth.controller");
+const { login, register } = require("./auth.controller");
 
-router.post("/login", loginWithFirebase);
-router.post("/google", googleLogin);
+// Auth routes
+router.post("/login", login);
+router.post("/register", register);
 
 module.exports = router;
