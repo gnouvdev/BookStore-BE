@@ -226,6 +226,15 @@ const resetPassword = async (req, res) => {
         .json({ message: "Token và mật khẩu mới là bắt buộc" });
     }
 
+    // Validate password strength
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[a-zA-Z\d]{8,}$/;
+    if (!passwordRegex.test(newPassword)) {
+      return res.status(400).json({
+        message:
+          "Mật khẩu phải có ít nhất 8 ký tự, bao gồm chữ hoa, chữ thường và số",
+      });
+    }
+
     let decoded;
     try {
       decoded = jwt.verify(token, process.env.JWT_SECRET_KEY);
