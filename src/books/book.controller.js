@@ -270,44 +270,41 @@ const searchBooks = async (req, res) => {
       return res.status(400).json({ message: "Query parameter is required" });
     }
 
-    // Loại bỏ dấu từ query và chuẩn hóa khoảng trắng
-    const normalizedQuery = removeDiacritics(query)
-      .toLowerCase()
-      .trim()
-      .replace(/\s+/g, " ");
+    // Chuyển query về không dấu
+    const normalizedQuery = normalizeText(query.toLowerCase());
     console.log("Normalized query:", normalizedQuery);
 
     let searchQuery = {};
     if (type === "title") {
-      searchQuery.$or = [
-        { title: { $regex: query, $options: "i" } },
-        { title: { $regex: normalizedQuery, $options: "i" } },
-      ];
+      searchQuery = {
+        $or: [
+          { title: { $regex: query, $options: "i" } },
+          { title: { $regex: normalizedQuery, $options: "i" } },
+        ],
+      };
     } else if (type === "author") {
-      // Tìm kiếm theo tên tác giả
       const authors = await Author.find({
         $or: [
           { name: { $regex: query, $options: "i" } },
           { name: { $regex: normalizedQuery, $options: "i" } },
         ],
       });
-      const authorIds = authors.map((author) => author._id);
-      searchQuery.author = { $in: authorIds };
+      searchQuery = { author: { $in: authors.map((a) => a._id) } };
     } else if (type === "category") {
-      // Tìm kiếm theo tên danh mục
       const categories = await Category.find({
         $or: [
           { name: { $regex: query, $options: "i" } },
           { name: { $regex: normalizedQuery, $options: "i" } },
         ],
       });
-      const categoryIds = categories.map((category) => category._id);
-      searchQuery.category = { $in: categoryIds };
+      searchQuery = { category: { $in: categories.map((c) => c._id) } };
     } else if (type === "tag") {
-      searchQuery.$or = [
-        { tags: { $regex: query, $options: "i" } },
-        { tags: { $regex: normalizedQuery, $options: "i" } },
-      ];
+      searchQuery = {
+        $or: [
+          { tags: { $regex: query, $options: "i" } },
+          { tags: { $regex: normalizedQuery, $options: "i" } },
+        ],
+      };
     } else {
       // Tìm kiếm tổng hợp
       const [authors, categories] = await Promise.all([
@@ -325,30 +322,18 @@ const searchBooks = async (req, res) => {
         }),
       ]);
 
-      const authorIds = authors.map((author) => author._id);
-      const categoryIds = categories.map((category) => category._id);
-
-      // Tạo mảng các từ khóa để tìm kiếm
-      const searchTerms = [
-        query,
-        normalizedQuery,
-        ...query.split(/\s+/),
-        ...normalizedQuery.split(/\s+/),
-      ].filter((term) => term.length > 0);
-
-      // Tạo mảng các RegExp objects
-      const searchRegexes = searchTerms.map((term) => new RegExp(term, "i"));
-
       searchQuery = {
         $or: [
           // Tìm kiếm theo tiêu đề
-          { title: { $in: searchRegexes } },
+          { title: { $regex: query, $options: "i" } },
+          { title: { $regex: normalizedQuery, $options: "i" } },
           // Tìm kiếm theo tác giả
-          { author: { $in: authorIds } },
+          { author: { $in: authors.map((a) => a._id) } },
           // Tìm kiếm theo danh mục
-          { category: { $in: categoryIds } },
+          { category: { $in: categories.map((c) => c._id) } },
           // Tìm kiếm theo tags
-          { tags: { $in: searchRegexes } },
+          { tags: { $regex: query, $options: "i" } },
+          { tags: { $regex: normalizedQuery, $options: "i" } },
         ],
       };
     }
@@ -372,6 +357,11 @@ const searchBooks = async (req, res) => {
   }
 };
 
+// Add this utility function at the top of the file
+const normalizeText = (str) => {
+  return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+};
+
 const getSearchSuggestions = async (req, res) => {
   try {
     const { query } = req.query;
@@ -382,51 +372,54 @@ const getSearchSuggestions = async (req, res) => {
       return res.status(400).json({ message: "Query parameter is required" });
     }
 
-    // Loại bỏ dấu từ query
-    const normalizedQuery = removeDiacritics(query);
+    // Normalize the query by removing diacritics
+    const normalizedQuery = normalizeText(query.toLowerCase());
     console.log("Normalized query:", normalizedQuery);
 
-    // Tìm kiếm sách theo tiêu đề
+    // Create a regex pattern that matches both with and without diacritics
+    const regexPattern = new RegExp(`(${query}|${normalizedQuery})`, "i");
+
+    // Search books with improved matching
     const books = await Book.find({
       $or: [
-        { title: { $regex: query, $options: "i" } },
-        { title: { $regex: normalizedQuery, $options: "i" } },
+        { title: { $regex: regexPattern } },
+        { title: { $regex: new RegExp(normalizedQuery, "i") } },
       ],
     })
       .populate("author", "name")
       .limit(5);
 
-    // Tìm kiếm tác giả
+    // Search authors with improved matching
     const authors = await Author.find({
       $or: [
-        { name: { $regex: query, $options: "i" } },
-        { name: { $regex: normalizedQuery, $options: "i" } },
+        { name: { $regex: regexPattern } },
+        { name: { $regex: new RegExp(normalizedQuery, "i") } },
       ],
     }).limit(5);
 
-    // Tìm kiếm danh mục
+    // Search categories with improved matching
     const categories = await Category.find({
       $or: [
-        { name: { $regex: query, $options: "i" } },
-        { name: { $regex: normalizedQuery, $options: "i" } },
+        { name: { $regex: regexPattern } },
+        { name: { $regex: new RegExp(normalizedQuery, "i") } },
       ],
     }).limit(5);
 
-    // Tìm kiếm tags
+    // Search tags with improved matching
     const booksWithTags = await Book.find({
       $or: [
-        { tags: { $regex: query, $options: "i" } },
-        { tags: { $regex: normalizedQuery, $options: "i" } },
+        { tags: { $regex: regexPattern } },
+        { tags: { $regex: new RegExp(normalizedQuery, "i") } },
       ],
     }).select("tags");
 
-    // Lấy danh sách tags duy nhất
+    // Get unique tags with improved matching
     const tags = [...new Set(booksWithTags.flatMap((book) => book.tags))]
       .filter((tag) => {
-        const normalizedTag = removeDiacritics(tag);
+        const normalizedTag = normalizeText(tag.toLowerCase());
         return (
           tag.toLowerCase().includes(query.toLowerCase()) ||
-          normalizedTag.toLowerCase().includes(normalizedQuery.toLowerCase())
+          normalizedTag.includes(normalizedQuery)
         );
       })
       .slice(0, 5);
