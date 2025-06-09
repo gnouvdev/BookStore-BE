@@ -227,11 +227,10 @@ const resetPassword = async (req, res) => {
     }
 
     // Validate password strength
-    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[a-zA-Z\d]{8,}$/;
+    const passwordRegex = /^(?=.*\d)[a-zA-Z\d]{8,}$/;
     if (!passwordRegex.test(newPassword)) {
       return res.status(400).json({
-        message:
-          "Mật khẩu phải có ít nhất 8 ký tự, bao gồm chữ hoa, chữ thường và số",
+        message: "Mật khẩu phải có ít nhất 8 ký tự và bao gồm số",
       });
     }
 
