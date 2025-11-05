@@ -6,6 +6,8 @@ const SearchHistory = require("../searchHistory/searchHistory.model");
 const Book = require("../books/book.model");
 const User = require("../users/user.model");
 const mongoose = require("mongoose");
+const specialEvents = require("../utils/specialEvents");
+const moment = require("moment");
 
 exports.getCollaborativeRecommendations = async (req, res) => {
   try {
@@ -18,6 +20,23 @@ exports.getCollaborativeRecommendations = async (req, res) => {
     console.log(
       `Generating recommendations for user: ${userId}, email: ${userEmail}`
     );
+
+    // Get contextual recommendations
+    const today = moment().format("DD/MM");
+    const event = specialEvents.find((e) => e.date === today);
+    let contextualBooks = [];
+    if (event) {
+      contextualBooks = await Book.find({
+        $or: [
+          { title: { $in: event.keywords.map((kw) => new RegExp(kw, "i")) } },
+          { description: { $in: event.keywords.map((kw) => new RegExp(kw, "i")) } },
+          { tags: { $in: event.keywords.map((kw) => new RegExp(kw, "i")) } },
+        ],
+      })
+        .limit(5)
+        .populate("author", "name")
+        .populate("category", "name");
+    }
 
     // Lấy hành vi người dùng hiện tại
     const user = await User.findById(userId)
@@ -171,12 +190,16 @@ exports.getCollaborativeRecommendations = async (req, res) => {
     // Nếu không đủ dữ liệu, trả về sách phổ biến
     if (Object.keys(userBookIds).length < 3) {
       console.log("Not enough user data, returning popular books");
-      const popularBooks = await Book.find()
+      const popularBooks = await Book.find({
+        _id: { $nin: contextualBooks.map(b => b._id) }
+      })
         .sort({ numReviews: -1, rating: -1 })
-        .limit(10)
+        .limit(10 - contextualBooks.length)
         .populate("author", "name")
         .populate("category", "name");
-      return res.status(200).json({ data: popularBooks });
+
+      const finalRecommendations = [...contextualBooks, ...popularBooks];
+      return res.status(200).json({ data: finalRecommendations, message: event ? event.message : "Popular books" });
     }
 
     // Lấy top 1000 người dùng khác có tương tác gần nhất
@@ -464,7 +487,16 @@ exports.getCollaborativeRecommendations = async (req, res) => {
       books.push(...additionalBooks);
     }
 
-    res.status(200).json({ data: books });
+    const finalRecommendations = [...contextualBooks];
+    const contextualBookIds = new Set(contextualBooks.map(b => b._id.toString()));
+
+    for (const book of books) {
+      if (!contextualBookIds.has(book._id.toString())) {
+        finalRecommendations.push(book);
+      }
+    }
+
+    res.status(200).json({ data: finalRecommendations.slice(0, 10), message: event ? event.message : "Recommendations generated successfully" });
   } catch (error) {
     console.error("Collaborative recommendation error:", error);
     res.status(500).json({ message: "Internal server error" });
