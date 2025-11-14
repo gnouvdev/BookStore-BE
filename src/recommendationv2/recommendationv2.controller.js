@@ -6,6 +6,7 @@ const SearchHistory = require("../searchHistory/searchHistory.model");
 const Book = require("../books/book.model");
 const User = require("../users/user.model");
 const mongoose = require("mongoose");
+const { getHolidayContext } = require("../utils/holidayContext");
 
 exports.getCollaborativeRecommendations = async (req, res) => {
   try {
@@ -63,8 +64,22 @@ exports.getCollaborativeRecommendations = async (req, res) => {
       console.log("Sample cart structure:", { items: carts[0].items });
     }
 
-    // Tạo tập userBookIds với trọng số
+    // Tạo tập userBookIds với trọng số cải thiện và time decay
     const userBookIds = {};
+    const now = Date.now();
+    const DAY_MS = 24 * 60 * 60 * 1000;
+
+    // Time decay function: interaction gần đây có trọng số cao hơn
+    const getTimeDecay = (timestamp) => {
+      if (!timestamp) return 1.0;
+      const daysAgo = (now - new Date(timestamp).getTime()) / DAY_MS;
+      if (daysAgo < 7) return 1.0; // Tuần gần đây: 100%
+      if (daysAgo < 30) return 0.8; // Tháng gần đây: 80%
+      if (daysAgo < 90) return 0.6; // 3 tháng: 60%
+      return 0.4; // Cũ hơn: 40%
+    };
+
+    // Weighting cải thiện
     orders.forEach((order) => {
       if (!order.user || !order.user.id) {
         console.warn("Skipping order with missing user:", {
@@ -80,37 +95,60 @@ exports.getCollaborativeRecommendations = async (req, res) => {
         });
         return;
       }
+      const timeDecay = getTimeDecay(order.createdAt);
       order.productIds.forEach((item) => {
         if (item.productId && item.productId._id) {
-          userBookIds[item.productId._id.toString()] = 1.0; // Mua
+          const bookId = item.productId._id.toString();
+          // Mua hàng: weight cao nhất, có time decay
+          const weight = 1.0 * timeDecay;
+          userBookIds[bookId] = Math.max(userBookIds[bookId] || 0, weight);
         } else {
           console.warn("Skipping order item with missing productId:", item);
         }
       });
     });
+
     reviews.forEach((review) => {
       if (review.book) {
-        userBookIds[review.book.toString()] = review.rating / 4; // Tăng trọng số
+        const bookId = review.book.toString();
+        const timeDecay = getTimeDecay(review.createdAt);
+        // Review rating cao có weight cao hơn
+        const ratingWeight =
+          review.rating >= 4 ? 0.9 : review.rating >= 3 ? 0.7 : 0.5;
+        const weight = ratingWeight * timeDecay;
+        userBookIds[bookId] = Math.max(userBookIds[bookId] || 0, weight);
       }
     });
+
     carts.forEach((cart) => {
       if (cart.items && Array.isArray(cart.items)) {
+        const timeDecay = getTimeDecay(cart.updatedAt);
         cart.items.forEach((item) => {
           if (item.book && item.book._id) {
-            userBookIds[item.book._id.toString()] = 0.8; // Giỏ hàng
+            const bookId = item.book._id.toString();
+            const weight = 0.8 * timeDecay;
+            userBookIds[bookId] = Math.max(userBookIds[bookId] || 0, weight);
           }
         });
       }
     });
+
     views.forEach((view) => {
       if (view.book) {
-        userBookIds[view.book.toString()] = 0.5; // Xem
+        const bookId = view.book.toString();
+        const timeDecay = getTimeDecay(view.timestamp);
+        // View gần đây quan trọng hơn
+        const weight = 0.5 * timeDecay;
+        userBookIds[bookId] = Math.max(userBookIds[bookId] || 0, weight);
       }
     });
+
     if (user && user.wishlist && Array.isArray(user.wishlist)) {
       user.wishlist.forEach((book) => {
         if (book && book._id) {
-          userBookIds[book._id.toString()] = 0.7; // Wishlist
+          const bookId = book._id.toString();
+          // Wishlist: weight cao, không có time decay (vì không có timestamp)
+          userBookIds[bookId] = Math.max(userBookIds[bookId] || 0, 0.7);
         }
       });
     }
@@ -283,8 +321,11 @@ exports.getCollaborativeRecommendations = async (req, res) => {
       }
     });
 
+    // Cải thiện similarity calculation với Jaccard similarity và cosine similarity kết hợp
     for (const userId in otherUsersBooks) {
       const otherBookIds = otherUsersBooks[userId];
+
+      // Cosine similarity (giữ nguyên)
       let dotProduct = 0;
       let normA = 0;
       let normB = 0;
@@ -301,35 +342,166 @@ exports.getCollaborativeRecommendations = async (req, res) => {
 
       normA = Math.sqrt(normA);
       normB = Math.sqrt(normB);
-      similarities[userId] = normA && normB ? dotProduct / (normA * normB) : 0;
+      const cosineSim = normA && normB ? dotProduct / (normA * normB) : 0;
+
+      // Jaccard similarity: intersection / union
+      const userBookSet = new Set(Object.keys(userBookIds));
+      const otherBookSet = new Set(Object.keys(otherBookIds));
+      const intersection = new Set(
+        [...userBookSet].filter((x) => otherBookSet.has(x))
+      );
+      const union = new Set([...userBookSet, ...otherBookSet]);
+      const jaccardSim = union.size > 0 ? intersection.size / union.size : 0;
+
+      // Kết hợp cả hai: 70% cosine, 30% jaccard
+      // Jaccard giúp phát hiện users có cùng sở thích dù interaction weights khác nhau
+      similarities[userId] = cosineSim * 0.7 + jaccardSim * 0.3;
+    }
+
+    // Lọc similarities với threshold tối thiểu (tăng lên để chọn users thực sự similar)
+    const MIN_SIMILARITY_THRESHOLD = 0.15; // Chỉ chọn users có similarity >= 0.15
+    const validSimilarities = Object.entries(similarities)
+      .filter(([_, sim]) => sim >= MIN_SIMILARITY_THRESHOLD)
+      .sort((a, b) => b[1] - a[1]);
+
+    // Nếu không có users similar đủ, giảm threshold nhưng log warning
+    if (validSimilarities.length < 3) {
+      console.warn(
+        `Only ${validSimilarities.length} similar users found, lowering threshold`
+      );
+      const lowerThreshold = Object.entries(similarities)
+        .filter(([_, sim]) => sim >= 0.05)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10);
+      validSimilarities.push(...lowerThreshold);
     }
 
     console.log(
       "Top similarities:",
-      Object.entries(similarities)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 5)
+      validSimilarities
+        .slice(0, 10)
+        .map(([uid, sim]) => ({ userId: uid, similarity: sim.toFixed(3) }))
     );
 
-    // Lấy top 5 người dùng tương tự
-    const topSimilarUsers = Object.keys(similarities)
-      .sort((a, b) => similarities[b] - similarities[a])
-      .slice(0, 5);
+    // Phân tích preferences của user hiện tại từ behavior
+    const userPreferences = {
+      categories: new Set(),
+      authors: new Set(),
+      tags: new Set(),
+    };
 
-    // Thu thập sách gợi ý
-    let recommendedBooks = [];
-    topSimilarUsers.forEach((userId) => {
+    // Lấy preferences từ books user đã tương tác
+    const userBookIdsArray = Object.keys(userBookIds);
+    if (userBookIdsArray.length > 0) {
+      const userBooks = await Book.find({
+        _id: {
+          $in: userBookIdsArray.map((id) => new mongoose.Types.ObjectId(id)),
+        },
+      })
+        .populate("author", "name")
+        .populate("category", "name")
+        .select("category author tags")
+        .lean();
+
+      userBooks.forEach((book) => {
+        if (book.category?.name)
+          userPreferences.categories.add(book.category.name);
+        if (book.author?.name) userPreferences.authors.add(book.author.name);
+        if (Array.isArray(book.tags)) {
+          book.tags.forEach((tag) => userPreferences.tags.add(tag));
+        }
+      });
+    }
+
+    console.log("User preferences:", {
+      categories: Array.from(userPreferences.categories),
+      authors: Array.from(userPreferences.authors),
+      tagsCount: userPreferences.tags.size,
+    });
+
+    // Lấy top similar users (tăng lên 10-15 để có diversity hơn)
+    const topSimilarUsers = validSimilarities
+      .slice(0, Math.max(10, validSimilarities.length))
+      .map(([userId, similarity]) => ({ userId, similarity }));
+
+    // Thu thập sách gợi ý với weighted scoring
+    const bookScores = {}; // { bookId: { score, fromUsers: [] } }
+
+    topSimilarUsers.forEach(({ userId, similarity }) => {
       const books = otherUsersBooks[userId];
+      if (!books) return;
+
       for (const bookId in books) {
         if (!userBookIds[bookId]) {
-          recommendedBooks.push(bookId);
+          if (!bookScores[bookId]) {
+            bookScores[bookId] = { score: 0, fromUsers: [] };
+          }
+          // Weighted score: similarity * interaction weight
+          const interactionWeight = books[bookId];
+          bookScores[bookId].score += similarity * interactionWeight;
+          bookScores[bookId].fromUsers.push({
+            userId,
+            similarity,
+            weight: interactionWeight,
+          });
         }
       }
     });
 
-    // Loại trùng lặp và lấy chi tiết sách
+    // Sắp xếp books theo score
+    let recommendedBooks = Object.entries(bookScores)
+      .sort((a, b) => b[1].score - a[1].score)
+      .map(([bookId]) => bookId);
+
+    console.log(
+      `Found ${recommendedBooks.length} books from collaborative filtering`
+    );
+
+    // Nếu không đủ, thêm content-based recommendations dựa trên user preferences
+    if (recommendedBooks.length < 10) {
+      console.log(
+        "Adding content-based recommendations based on user preferences"
+      );
+      const contentBasedBooks = await Book.find({
+        _id: {
+          $nin: [
+            ...recommendedBooks.map((id) => new mongoose.Types.ObjectId(id)),
+            ...userBookIdsArray.map((id) => new mongoose.Types.ObjectId(id)),
+          ],
+        },
+        $or: [
+          ...(userPreferences.categories.size > 0
+            ? [
+                {
+                  "category.name": {
+                    $in: Array.from(userPreferences.categories),
+                  },
+                },
+              ]
+            : []),
+          ...(userPreferences.authors.size > 0
+            ? [{ "author.name": { $in: Array.from(userPreferences.authors) } }]
+            : []),
+          ...(userPreferences.tags.size > 0
+            ? [{ tags: { $in: Array.from(userPreferences.tags) } }]
+            : []),
+        ],
+      })
+        .select("_id")
+        .limit(20)
+        .lean();
+
+      const contentBasedIds = contentBasedBooks.map((b) => b._id.toString());
+      // Thêm vào đầu để ưu tiên
+      recommendedBooks = [...contentBasedIds, ...recommendedBooks].slice(0, 30);
+      console.log(
+        `Added ${contentBasedIds.length} content-based recommendations`
+      );
+    }
+
+    // Loại trùng lặp
     recommendedBooks = [...new Set(recommendedBooks)];
-    const books = await Book.aggregate([
+    let books = await Book.aggregate([
       {
         $match: {
           _id: {
@@ -384,30 +556,156 @@ exports.getCollaborativeRecommendations = async (req, res) => {
           numReviews: { $ifNull: ["$numReviews", 0] },
           author: { _id: 1, name: 1 },
           category: { _id: 1, name: 1 },
+          tags: 1,
+          trending: 1,
         },
       },
-      { $limit: 10 },
     ]);
 
-    console.log(`Recommended ${books.length} books`);
+    // Tính điểm ưu tiên cho mỗi book dựa trên user preferences và collaborative score
+    const bookScoresMap = new Map(
+      Object.entries(bookScores).map(([id, data]) => [id, data.score])
+    );
 
-    // Nếu không đủ gợi ý, bổ sung sách phổ biến
-    if (books.length < 5) {
+    books.forEach((book) => {
+      let personalizationScore = 0;
+      const bookId = book._id.toString();
+
+      // Boost nếu match với user preferences
+      if (userPreferences.categories.has(book.category?.name)) {
+        personalizationScore += 0.3; // Match category
+      }
+      if (userPreferences.authors.has(book.author?.name)) {
+        personalizationScore += 0.4; // Match author (quan trọng hơn)
+      }
+      if (Array.isArray(book.tags)) {
+        const matchingTags = book.tags.filter((tag) =>
+          userPreferences.tags.has(tag)
+        ).length;
+        personalizationScore += matchingTags * 0.1; // Mỗi tag match +0.1
+      }
+
+      // Collaborative score từ similar users
+      const collaborativeScore = bookScoresMap.get(bookId) || 0;
+
+      // Trending boost
+      const trendingBoost = book.trending ? 0.1 : 0;
+
+      // Rating boost
+      const ratingBoost = (book.rating || 0) * 0.05;
+
+      // Final score: personalization + collaborative + quality
+      book._personalizationScore = personalizationScore;
+      book._collaborativeScore = collaborativeScore;
+      book._finalScore =
+        personalizationScore + collaborativeScore + trendingBoost + ratingBoost;
+    });
+
+    // Sắp xếp theo final score
+    books.sort((a, b) => {
+      // Ưu tiên books có personalization score cao (user preferences)
+      if (Math.abs(a._personalizationScore - b._personalizationScore) > 0.1) {
+        return b._personalizationScore - a._personalizationScore;
+      }
+      // Sau đó theo final score
+      return b._finalScore - a._finalScore;
+    });
+
+    // Đảm bảo diversity: không quá nhiều books cùng category/author
+    const finalBooks = [];
+    const categoryCount = {};
+    const authorCount = {};
+    const MAX_PER_CATEGORY = 3;
+    const MAX_PER_AUTHOR = 2;
+
+    for (const book of books) {
+      const category = book.category?.name || "unknown";
+      const author = book.author?.name || "unknown";
+
+      if (
+        (categoryCount[category] || 0) < MAX_PER_CATEGORY &&
+        (authorCount[author] || 0) < MAX_PER_AUTHOR
+      ) {
+        finalBooks.push(book);
+        categoryCount[category] = (categoryCount[category] || 0) + 1;
+        authorCount[author] = (authorCount[author] || 0) + 1;
+
+        if (finalBooks.length >= 10) break;
+      }
+    }
+
+    // Nếu chưa đủ, thêm books còn lại (không cần diversity check)
+    if (finalBooks.length < 10) {
+      for (const book of books) {
+        if (!finalBooks.some((b) => b._id.toString() === book._id.toString())) {
+          finalBooks.push(book);
+          if (finalBooks.length >= 10) break;
+        }
+      }
+    }
+
+    // Loại bỏ các field tạm thời
+    finalBooks.forEach((book) => {
+      delete book._personalizationScore;
+      delete book._collaborativeScore;
+      delete book._finalScore;
+    });
+
+    const personalizedCount = finalBooks.filter((b) => {
+      const bookId = b._id.toString();
+      return (
+        userPreferences.categories.has(b.category?.name) ||
+        userPreferences.authors.has(b.author?.name) ||
+        (Array.isArray(b.tags) &&
+          b.tags.some((tag) => userPreferences.tags.has(tag)))
+      );
+    }).length;
+
+    console.log(
+      `Recommended ${finalBooks.length} books (${personalizedCount} personalized)`
+    );
+
+    // Nếu không đủ gợi ý, bổ sung sách phổ biến dựa trên user preferences
+    if (finalBooks.length < 5) {
       console.log("Supplementing with popular books");
+      // Fallback: tìm sách phổ biến nhưng ưu tiên match với user preferences
+      const fallbackMatch = {
+        _id: {
+          $nin: [
+            ...finalBooks.map((b) => b._id),
+            ...userBookIdsArray.map((id) => new mongoose.Types.ObjectId(id)),
+          ],
+        },
+      };
+
+      // Nếu có user preferences, ưu tiên match
+      if (
+        userPreferences.categories.size > 0 ||
+        userPreferences.authors.size > 0 ||
+        userPreferences.tags.size > 0
+      ) {
+        fallbackMatch.$or = [
+          ...(userPreferences.categories.size > 0
+            ? [
+                {
+                  "category.name": {
+                    $in: Array.from(userPreferences.categories),
+                  },
+                },
+              ]
+            : []),
+          ...(userPreferences.authors.size > 0
+            ? [{ "author.name": { $in: Array.from(userPreferences.authors) } }]
+            : []),
+          ...(userPreferences.tags.size > 0
+            ? [{ tags: { $in: Array.from(userPreferences.tags) } }]
+            : []),
+        ];
+      }
+
       const additionalBooks = await Book.aggregate([
         {
-          $match: {
-            _id: {
-              $nin: [
-                ...recommendedBooks.map(
-                  (id) => new mongoose.Types.ObjectId(id)
-                ),
-                ...Object.keys(userBookIds).map(
-                  (id) => new mongoose.Types.ObjectId(id)
-                ),
-              ],
-            },
-          },
+          $match: fallbackMatch,
         },
         {
           $lookup: {
@@ -458,15 +756,386 @@ exports.getCollaborativeRecommendations = async (req, res) => {
             category: { _id: 1, name: 1 },
           },
         },
-        { $sort: { numReviews: -1, rating: -1 } },
-        { $limit: 10 - books.length },
+        { $sort: { trending: -1, rating: -1, numReviews: -1 } },
+        { $limit: 10 - finalBooks.length },
       ]);
-      books.push(...additionalBooks);
+      finalBooks.push(...additionalBooks);
     }
 
-    res.status(200).json({ data: books });
+    // Đảm bảo trả về đúng finalBooks
+    books = finalBooks;
+
+    // Kiểm tra ngày lễ và ưu tiên sách liên quan
+    const holidayContext = getHolidayContext();
+    if (holidayContext.isHoliday || holidayContext.isNearHoliday) {
+      console.log("Holiday context detected:", {
+        isHoliday: holidayContext.isHoliday,
+        isNearHoliday: holidayContext.isNearHoliday,
+        holidays: holidayContext.holidays || holidayContext.upcomingHoliday,
+        tags: holidayContext.tags,
+      });
+
+      // Tìm sách liên quan đến ngày lễ
+      const matchConditions = [
+        { tags: { $in: holidayContext.tags } },
+        ...holidayContext.tags.map((tag) => ({
+          title: { $regex: tag, $options: "i" },
+        })),
+        ...holidayContext.tags.map((tag) => ({
+          description: { $regex: tag, $options: "i" },
+        })),
+      ];
+
+      const holidayBooks = await Book.aggregate([
+        {
+          $match: {
+            $or: matchConditions,
+          },
+        },
+        {
+          $lookup: {
+            from: "reviews",
+            localField: "_id",
+            foreignField: "book",
+            as: "reviews",
+          },
+        },
+        {
+          $addFields: {
+            rating: { $avg: "$reviews.rating" },
+            numReviews: { $size: "$reviews" },
+          },
+        },
+        {
+          $lookup: {
+            from: "authors",
+            localField: "author",
+            foreignField: "_id",
+            as: "author",
+          },
+        },
+        {
+          $lookup: {
+            from: "categories",
+            localField: "category",
+            foreignField: "_id",
+            as: "category",
+          },
+        },
+        {
+          $addFields: {
+            author: { $arrayElemAt: ["$author", 0] },
+            category: { $arrayElemAt: ["$category", 0] },
+          },
+        },
+        {
+          $project: {
+            _id: 1,
+            title: 1,
+            description: 1,
+            coverImage: 1,
+            price: 1,
+            rating: { $ifNull: ["$rating", 0] },
+            numReviews: { $ifNull: ["$numReviews", 0] },
+            author: { _id: 1, name: 1 },
+            category: { _id: 1, name: 1 },
+            tags: 1,
+          },
+        },
+        { $sort: { rating: -1, numReviews: -1 } },
+        { $limit: 5 },
+      ]);
+
+      if (holidayBooks.length > 0) {
+        console.log(`Found ${holidayBooks.length} holiday-related books`);
+        // Loại bỏ sách trùng lặp và ưu tiên sách ngày lễ ở đầu danh sách
+        const existingBookIds = new Set(books.map((b) => b._id.toString()));
+        const newHolidayBooks = holidayBooks.filter(
+          (b) => !existingBookIds.has(b._id.toString())
+        );
+        // Thêm sách ngày lễ vào đầu danh sách
+        books.unshift(...newHolidayBooks);
+        // Giới hạn lại số lượng
+        books.splice(10);
+      }
+    }
+
+    res.status(200).json({
+      data: books,
+      context:
+        holidayContext.isHoliday || holidayContext.isNearHoliday
+          ? {
+              isHoliday: holidayContext.isHoliday,
+              isNearHoliday: holidayContext.isNearHoliday,
+              holidayName:
+                holidayContext.holidays?.[0] ||
+                holidayContext.upcomingHoliday ||
+                null,
+            }
+          : null,
+    });
   } catch (error) {
     console.error("Collaborative recommendation error:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+/**
+ * Lấy gợi ý sách theo ngữ cảnh (ngày lễ)
+ * Trả về sách liên quan đến ngày lễ hiện tại hoặc sắp tới
+ */
+exports.getContextualRecommendations = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    const holidayContext = getHolidayContext();
+
+    console.log("Contextual recommendation - Holiday context:", holidayContext);
+
+    // Nếu không có ngày lễ, trả về sách trending/popular thay vì empty
+    if (!holidayContext.isHoliday && !holidayContext.isNearHoliday) {
+      console.log("No holiday detected, returning trending/popular books");
+      const trendingBooks = await Book.aggregate([
+        {
+          $lookup: {
+            from: "reviews",
+            localField: "_id",
+            foreignField: "book",
+            as: "reviews",
+          },
+        },
+        {
+          $addFields: {
+            rating: { $avg: "$reviews.rating" },
+            numReviews: { $size: "$reviews" },
+          },
+        },
+        {
+          $lookup: {
+            from: "authors",
+            localField: "author",
+            foreignField: "_id",
+            as: "author",
+          },
+        },
+        {
+          $lookup: {
+            from: "categories",
+            localField: "category",
+            foreignField: "_id",
+            as: "category",
+          },
+        },
+        {
+          $addFields: {
+            author: { $arrayElemAt: ["$author", 0] },
+            category: { $arrayElemAt: ["$category", 0] },
+          },
+        },
+        {
+          $match: {
+            $or: [
+              { trending: true },
+              { rating: { $gte: 4 } },
+              { numReviews: { $gte: 5 } },
+            ],
+          },
+        },
+        {
+          $project: {
+            _id: 1,
+            title: 1,
+            description: 1,
+            coverImage: 1,
+            price: 1,
+            rating: { $ifNull: ["$rating", 0] },
+            numReviews: { $ifNull: ["$numReviews", 0] },
+            author: { _id: 1, name: 1 },
+            category: { _id: 1, name: 1 },
+            tags: 1,
+            trending: 1,
+          },
+        },
+        {
+          $sort: { trending: -1, rating: -1, numReviews: -1 },
+        },
+        { $limit: 20 },
+      ]);
+
+      return res.status(200).json({
+        data: trendingBooks,
+        context: {
+          isHoliday: false,
+          isNearHoliday: false,
+          holidayName: "Sách nổi bật",
+          tags: ["trending", "popular", "best-seller"],
+        },
+      });
+    }
+
+    // Tìm sách liên quan đến ngày lễ
+    const matchConditions = [
+      { tags: { $in: holidayContext.tags } },
+      ...holidayContext.tags.map((tag) => ({
+        title: { $regex: tag, $options: "i" },
+      })),
+      ...holidayContext.tags.map((tag) => ({
+        description: { $regex: tag, $options: "i" },
+      })),
+    ];
+
+    const holidayBooks = await Book.aggregate([
+      {
+        $match: {
+          $or: matchConditions,
+        },
+      },
+      {
+        $lookup: {
+          from: "reviews",
+          localField: "_id",
+          foreignField: "book",
+          as: "reviews",
+        },
+      },
+      {
+        $addFields: {
+          rating: { $avg: "$reviews.rating" },
+          numReviews: { $size: "$reviews" },
+        },
+      },
+      {
+        $lookup: {
+          from: "authors",
+          localField: "author",
+          foreignField: "_id",
+          as: "author",
+        },
+      },
+      {
+        $lookup: {
+          from: "categories",
+          localField: "category",
+          foreignField: "_id",
+          as: "category",
+        },
+      },
+      {
+        $addFields: {
+          author: { $arrayElemAt: ["$author", 0] },
+          category: { $arrayElemAt: ["$category", 0] },
+        },
+      },
+      {
+        $project: {
+          _id: 1,
+          title: 1,
+          description: 1,
+          coverImage: 1,
+          price: 1,
+          rating: { $ifNull: ["$rating", 0] },
+          numReviews: { $ifNull: ["$numReviews", 0] },
+          author: { _id: 1, name: 1 },
+          category: { _id: 1, name: 1 },
+          tags: 1,
+        },
+      },
+      { $sort: { rating: -1, numReviews: -1 } },
+      { $limit: 20 },
+    ]);
+
+    console.log(
+      `Found ${holidayBooks.length} books related to holiday: ${
+        holidayContext.holidays?.[0] || holidayContext.upcomingHoliday
+      }`
+    );
+
+    // Nếu không tìm thấy sách theo tags, tìm theo từ khóa trong title/description
+    if (holidayBooks.length < 5) {
+      const keywordConditions = holidayContext.tags
+        .slice(0, 3)
+        .flatMap((tag) => [
+          { title: { $regex: tag, $options: "i" } },
+          { description: { $regex: tag, $options: "i" } },
+        ]);
+
+      const keywordBooks = await Book.aggregate([
+        {
+          $match: {
+            _id: {
+              $nin: holidayBooks.map((b) => b._id),
+            },
+            $or: keywordConditions,
+          },
+        },
+        {
+          $lookup: {
+            from: "reviews",
+            localField: "_id",
+            foreignField: "book",
+            as: "reviews",
+          },
+        },
+        {
+          $addFields: {
+            rating: { $avg: "$reviews.rating" },
+            numReviews: { $size: "$reviews" },
+          },
+        },
+        {
+          $lookup: {
+            from: "authors",
+            localField: "author",
+            foreignField: "_id",
+            as: "author",
+          },
+        },
+        {
+          $lookup: {
+            from: "categories",
+            localField: "category",
+            foreignField: "_id",
+            as: "category",
+          },
+        },
+        {
+          $addFields: {
+            author: { $arrayElemAt: ["$author", 0] },
+            category: { $arrayElemAt: ["$category", 0] },
+          },
+        },
+        {
+          $project: {
+            _id: 1,
+            title: 1,
+            description: 1,
+            coverImage: 1,
+            price: 1,
+            rating: { $ifNull: ["$rating", 0] },
+            numReviews: { $ifNull: ["$numReviews", 0] },
+            author: { _id: 1, name: 1 },
+            category: { _id: 1, name: 1 },
+            tags: 1,
+          },
+        },
+        { $sort: { rating: -1, numReviews: -1 } },
+        { $limit: 10 },
+      ]);
+
+      holidayBooks.push(...keywordBooks);
+    }
+
+    res.status(200).json({
+      data: holidayBooks.slice(0, 20),
+      context: {
+        isHoliday: holidayContext.isHoliday,
+        isNearHoliday: holidayContext.isNearHoliday,
+        holidayName: holidayContext.holidayName,
+        daysUntil: holidayContext.daysUntil,
+        tags: holidayContext.tags,
+      },
+    });
+  } catch (error) {
+    console.error("Contextual recommendation error:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 };

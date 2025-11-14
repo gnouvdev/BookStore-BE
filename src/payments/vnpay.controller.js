@@ -68,8 +68,8 @@ const createVNPayUrl = async (req, res) => {
     });
 
     // Configuration
-    const tmnCode = process.env.VNPAY_TMN_CODE || "AU9BAQNI";
-    const secretKey = process.env.VNPAY_HASH_SECRET || "IGLFMU57T2DR2NXMHC4YWF06H2BA2EFB";
+    const tmnCode = process.env.VNPAY_TMN_CODE || "YXJQCNL5";
+    const secretKey = process.env.VNPAY_HASH_SECRET || "GY7621QUP636N086DIBA2ENK2Y3R66XE";
     const vnpUrl = process.env.VNPAY_HOST || "https://sandbox.vnpayment.vn/paymentv2/vpcpay.html";
     const returnUrl = process.env.VNPAY_RETURN_URL || "http://localhost:5173/orders/thanks";
 
@@ -189,7 +189,7 @@ const handleVNPayIPN = async (req, res) => {
     // Sort parameters
     vnpParams = sortObject(vnpParams);
 
-    const secretKey = process.env.VNPAY_HASH_SECRET || "IGLFMU57T2DR2NXMHC4YWF06H2BA2EFB";
+    const secretKey = process.env.VNPAY_HASH_SECRET || "GY7621QUP636N086DIBA2ENK2Y3R66XE";
     const signData = Object.keys(vnpParams)
       .map((key) => `${key}=${encodeURIComponent(vnpParams[key]).replace(/%20/g, "+")}`)
       .join("&");
@@ -245,7 +245,7 @@ const handleVNPayReturn = async (req, res) => {
     // Sort parameters
     vnpParams = sortObject(vnpParams);
 
-    const secretKey = process.env.VNPAY_HASH_SECRET || "IGLFMU57T2DR2NXMHC4YWF06H2BA2EFB";
+    const secretKey = process.env.VNPAY_HASH_SECRET || "GY7621QUP636N086DIBA2ENK2Y3R66XE";
     const signData = Object.keys(vnpParams)
       .map((key) => `${key}=${encodeURIComponent(vnpParams[key]).replace(/%20/g, "+")}`)
       .join("&");

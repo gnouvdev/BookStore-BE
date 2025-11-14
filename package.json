@@ -24,10 +24,12 @@
     "fast-cosine-similarity": "^1.2.2",
     "firebase-admin": "^13.3.0",
     "jsonwebtoken": "^9.0.2",
+    "llamaindex": "^0.10.0",
     "lodash": "^4.17.21",
     "mongoose": "^8.12.1",
     "natural": "^8.0.1",
     "nodemailer": "^7.0.3",
+    "openai": "^4.20.0",
     "redis": "^5.1.0",
     "socket.io": "^4.8.1",
     "vnpay": "^2.2.0"

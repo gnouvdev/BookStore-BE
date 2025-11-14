@@ -1,5 +1,6 @@
 const Chat = require("./chat.model");
 const User = require("../users/user.model");
+const chatbotService = require("../chatbot/chatbot.service");
 
 // Lấy lịch sử chat giữa 2 người dùng
 const getChatHistory = async (req, res) => {
@@ -14,13 +15,21 @@ const getChatHistory = async (req, res) => {
       currentUserRole,
     });
 
-    // Xử lý đặc biệt cho chat với admin
+    // Xử lý đặc biệt cho chat với admin hoặc chatbot
     const isAdminChat = userId === "admin";
+    const isBotChat = userId === "chatbot";
     const query = isAdminChat
       ? {
           $or: [
             { senderId: currentUserId, receiverId: "admin" },
             { senderId: "admin", receiverId: currentUserId },
+          ],
+        }
+      : isBotChat
+      ? {
+          $or: [
+            { senderId: currentUserId, receiverId: "chatbot" },
+            { senderId: "chatbot", receiverId: currentUserId },
           ],
         }
       : {
@@ -32,14 +41,27 @@ const getChatHistory = async (req, res) => {
 
     console.log("Chat query:", query);
 
-    const messages = await Chat.find(query).sort({ createdAt: 1 }).limit(50);
+    const messages = await Chat.find(query)
+      .sort({ createdAt: 1 })
+      .limit(50)
+      .lean(); // Sử dụng lean() để trả về plain objects
 
     console.log("Found messages:", messages.length);
+    console.log(
+      "Sample message with books:",
+      messages.find((m) => m.books && m.books.length > 0)
+    );
 
     // Đánh dấu tin nhắn chưa đọc là đã đọc
     const updateQuery = isAdminChat
       ? {
           senderId: "admin",
+          receiverId: currentUserId,
+          isRead: false,
+        }
+      : isBotChat
+      ? {
+          senderId: "chatbot",
           receiverId: currentUserId,
           isRead: false,
         }
@@ -85,9 +107,19 @@ const sendMessage = async (req, res) => {
       });
     }
 
-    // Nếu gửi tin nhắn đến admin, sử dụng ID cố định cho admin
-    const actualReceiverId = receiverId === "admin" ? "admin" : receiverId;
-    const actualReceiverRole = receiverId === "admin" ? "admin" : "user";
+    // Nếu gửi tin nhắn đến admin hoặc chatbot, sử dụng ID cố định
+    const actualReceiverId =
+      receiverId === "admin"
+        ? "admin"
+        : receiverId === "chatbot"
+        ? "chatbot"
+        : receiverId;
+    const actualReceiverRole =
+      receiverId === "admin"
+        ? "admin"
+        : receiverId === "chatbot"
+        ? "bot"
+        : "user";
 
     const newMessage = new Chat({
       senderId,
@@ -101,6 +133,92 @@ const sendMessage = async (req, res) => {
 
     const savedMessage = await newMessage.save();
     console.log("Message saved:", savedMessage);
+
+    // Nếu gửi tin nhắn đến chatbot, tự động tạo phản hồi
+    if (actualReceiverId === "chatbot") {
+      try {
+        const botResponse = await chatbotService.processMessage(
+          message.trim(),
+          senderId
+        );
+
+        // Xử lý response từ bot (có thể là object hoặc string)
+        let botResponseText = "";
+        let botResponseBooks = [];
+
+        if (typeof botResponse === "object" && botResponse !== null) {
+          botResponseText = botResponse.text || "";
+          botResponseBooks = botResponse.books || [];
+        } else {
+          botResponseText = botResponse || "";
+        }
+
+        // Lưu phản hồi của bot (lưu cả text và books)
+        const botMessage = new Chat({
+          senderId: "chatbot",
+          receiverId: senderId,
+          message: botResponseText,
+          senderRole: "bot",
+          receiverRole: senderRole,
+          isRead: false,
+          books: botResponseBooks || [], // Lưu books vào database
+        });
+        const savedBotMessage = await botMessage.save();
+
+        console.log("Bot message saved with books:", {
+          messageId: savedBotMessage._id,
+          booksCount: savedBotMessage.books?.length || 0,
+        });
+
+        // Gửi tin nhắn qua socket
+        const io = req.app.get("io");
+        if (io) {
+          const userRoom = `chat:${senderId}`;
+
+          // Gửi tin nhắn của user
+          io.to(userRoom).emit("newMessage", {
+            message: savedMessage,
+          });
+
+          // Gửi phản hồi của bot (có delay nhỏ để tự nhiên hơn)
+          setTimeout(() => {
+            // Books đã được lưu trong savedBotMessage khi save
+            const messageWithBooks = savedBotMessage.toObject();
+            console.log("Emitting bot message with books:", {
+              messageId: messageWithBooks._id,
+              booksCount: messageWithBooks.books?.length || 0,
+              hasBooks: !!messageWithBooks.books,
+            });
+            io.to(userRoom).emit("newMessage", {
+              message: messageWithBooks,
+            });
+          }, 500);
+        }
+
+        // Đảm bảo books được trả về trong response
+        const responseData = {
+          userMessage: savedMessage.toObject
+            ? savedMessage.toObject()
+            : savedMessage,
+          botMessage: savedBotMessage.toObject
+            ? savedBotMessage.toObject()
+            : savedBotMessage,
+        };
+
+        console.log("Response data with books:", {
+          botMessageId: responseData.botMessage._id,
+          booksCount: responseData.botMessage.books?.length || 0,
+          hasBooks: !!responseData.botMessage.books,
+        });
+
+        return res.status(201).json({
+          data: responseData,
+        });
+      } catch (botError) {
+        console.error("Error processing chatbot response:", botError);
+        // Nếu bot lỗi, vẫn trả về tin nhắn của user
+      }
+    }
 
     // Gửi tin nhắn qua socket
     const io = req.app.get("io");

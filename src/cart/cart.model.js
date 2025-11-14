@@ -29,30 +29,50 @@ cartSchema.index({ user: 1, firebaseId: 1 }, { unique: true });
 
 const Cart = mongoose.model("Cart", cartSchema);
 
-// Function to reset cart collection
+// Function to reset cart collection - chỉ gọi khi cần thiết
 const resetCartCollection = async () => {
   try {
-    // Drop the collection
-    await Cart.collection.drop();
-    console.log("Cart collection dropped successfully");
+    // Đợi MongoDB kết nối
+    if (mongoose.connection.readyState !== 1) {
+      await new Promise((resolve) => {
+        mongoose.connection.once("connected", resolve);
+      });
+    }
+
+    // Kiểm tra xem collection có tồn tại không
+    const collections = await mongoose.connection.db
+      .listCollections()
+      .toArray();
+    const collectionExists = collections.some((col) => col.name === "carts");
+
+    if (collectionExists) {
+      // Drop the collection
+      await Cart.collection.drop();
+      console.log("Cart collection dropped successfully");
+    }
 
     // Create new indexes
     await Cart.createIndexes();
     console.log("Cart indexes created successfully");
   } catch (error) {
-    if (error.code === 26) {
+    if (error.code === 26 || error.message?.includes("not found")) {
       // Collection doesn't exist, that's fine
       console.log("Cart collection doesn't exist, creating new one");
-      await Cart.createIndexes();
-      console.log("Cart indexes created successfully");
+      try {
+        await Cart.createIndexes();
+        console.log("Cart indexes created successfully");
+      } catch (indexError) {
+        console.error("Error creating cart indexes:", indexError);
+      }
     } else {
       console.error("Error resetting cart collection:", error);
-      throw error;
+      // Không throw error để không crash server
     }
   }
 };
 
-// Call resetCartCollection when the model is initialized
-resetCartCollection();
+// KHÔNG tự động gọi resetCartCollection khi module load
+// Chỉ gọi khi cần thiết (ví dụ: trong script migration hoặc admin route)
+// resetCartCollection();
 
 module.exports = Cart;

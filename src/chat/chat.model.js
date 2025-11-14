@@ -20,13 +20,17 @@ const chatSchema = new mongoose.Schema(
     },
     senderRole: {
       type: String,
-      enum: ["user", "admin"],
+      enum: ["user", "admin", "bot"],
       required: true,
     },
     receiverRole: {
       type: String,
-      enum: ["user", "admin"],
+      enum: ["user", "admin", "bot"],
       required: true,
+    },
+    books: {
+      type: [mongoose.Schema.Types.Mixed],
+      default: [],
     },
   },
   {

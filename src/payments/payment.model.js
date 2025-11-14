@@ -52,7 +52,6 @@ const paymentSchema = new mongoose.Schema(
   }
 );
 
-paymentSchema.index({ code: 1 });
 paymentSchema.index({ isActive: 1 });
 
 const Payment = mongoose.model("Payment", paymentSchema);
