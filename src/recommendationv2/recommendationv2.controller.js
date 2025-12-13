@@ -7,6 +7,7 @@ const Book = require("../books/book.model");
 const User = require("../users/user.model");
 const mongoose = require("mongoose");
 const { getHolidayContext } = require("../utils/holidayContext");
+const { getContextualModelRecommendations } = require("./contextualModel");
 
 exports.getCollaborativeRecommendations = async (req, res) => {
   try {
@@ -891,248 +892,36 @@ exports.getContextualRecommendations = async (req, res) => {
 
     console.log("Contextual recommendation - Holiday context:", holidayContext);
 
-    // Nếu không có ngày lễ, trả về sách trending/popular thay vì empty
-    if (!holidayContext.isHoliday && !holidayContext.isNearHoliday) {
-      console.log("No holiday detected, returning trending/popular books");
-      const trendingBooks = await Book.aggregate([
-        {
-          $lookup: {
-            from: "reviews",
-            localField: "_id",
-            foreignField: "book",
-            as: "reviews",
-          },
-        },
-        {
-          $addFields: {
-            rating: { $avg: "$reviews.rating" },
-            numReviews: { $size: "$reviews" },
-          },
-        },
-        {
-          $lookup: {
-            from: "authors",
-            localField: "author",
-            foreignField: "_id",
-            as: "author",
-          },
-        },
-        {
-          $lookup: {
-            from: "categories",
-            localField: "category",
-            foreignField: "_id",
-            as: "category",
-          },
-        },
-        {
-          $addFields: {
-            author: { $arrayElemAt: ["$author", 0] },
-            category: { $arrayElemAt: ["$category", 0] },
-          },
-        },
-        {
-          $match: {
-            $or: [
-              { trending: true },
-              { rating: { $gte: 4 } },
-              { numReviews: { $gte: 5 } },
-            ],
-          },
-        },
-        {
-          $project: {
-            _id: 1,
-            title: 1,
-            description: 1,
-            coverImage: 1,
-            price: 1,
-            rating: { $ifNull: ["$rating", 0] },
-            numReviews: { $ifNull: ["$numReviews", 0] },
-            author: { _id: 1, name: 1 },
-            category: { _id: 1, name: 1 },
-            tags: 1,
-            trending: 1,
-          },
-        },
-        {
-          $sort: { trending: -1, rating: -1, numReviews: -1 },
-        },
-        { $limit: 20 },
-      ]);
+    const limit = Number(req.query?.limit) || 20;
+    const { books, debug } = await getContextualModelRecommendations({
+      holidayContext:
+        holidayContext.isHoliday || holidayContext.isNearHoliday
+          ? holidayContext
+          : null,
+      limit,
+    });
 
-      return res.status(200).json({
-        data: trendingBooks,
-        context: {
-          isHoliday: false,
-          isNearHoliday: false,
-          holidayName: "Sách nổi bật",
-          tags: ["trending", "popular", "best-seller"],
-        },
-      });
-    }
-
-    // Tìm sách liên quan đến ngày lễ
-    const matchConditions = [
-      { tags: { $in: holidayContext.tags } },
-      ...holidayContext.tags.map((tag) => ({
-        title: { $regex: tag, $options: "i" },
-      })),
-      ...holidayContext.tags.map((tag) => ({
-        description: { $regex: tag, $options: "i" },
-      })),
-    ];
-
-    const holidayBooks = await Book.aggregate([
-      {
-        $match: {
-          $or: matchConditions,
-        },
-      },
-      {
-        $lookup: {
-          from: "reviews",
-          localField: "_id",
-          foreignField: "book",
-          as: "reviews",
-        },
-      },
-      {
-        $addFields: {
-          rating: { $avg: "$reviews.rating" },
-          numReviews: { $size: "$reviews" },
-        },
-      },
-      {
-        $lookup: {
-          from: "authors",
-          localField: "author",
-          foreignField: "_id",
-          as: "author",
-        },
-      },
-      {
-        $lookup: {
-          from: "categories",
-          localField: "category",
-          foreignField: "_id",
-          as: "category",
-        },
-      },
-      {
-        $addFields: {
-          author: { $arrayElemAt: ["$author", 0] },
-          category: { $arrayElemAt: ["$category", 0] },
-        },
-      },
-      {
-        $project: {
-          _id: 1,
-          title: 1,
-          description: 1,
-          coverImage: 1,
-          price: 1,
-          rating: { $ifNull: ["$rating", 0] },
-          numReviews: { $ifNull: ["$numReviews", 0] },
-          author: { _id: 1, name: 1 },
-          category: { _id: 1, name: 1 },
-          tags: 1,
-        },
-      },
-      { $sort: { rating: -1, numReviews: -1 } },
-      { $limit: 20 },
-    ]);
-
-    console.log(
-      `Found ${holidayBooks.length} books related to holiday: ${
-        holidayContext.holidays?.[0] || holidayContext.upcomingHoliday
-      }`
-    );
-
-    // Nếu không tìm thấy sách theo tags, tìm theo từ khóa trong title/description
-    if (holidayBooks.length < 5) {
-      const keywordConditions = holidayContext.tags
-        .slice(0, 3)
-        .flatMap((tag) => [
-          { title: { $regex: tag, $options: "i" } },
-          { description: { $regex: tag, $options: "i" } },
-        ]);
-
-      const keywordBooks = await Book.aggregate([
-        {
-          $match: {
-            _id: {
-              $nin: holidayBooks.map((b) => b._id),
-            },
-            $or: keywordConditions,
-          },
-        },
-        {
-          $lookup: {
-            from: "reviews",
-            localField: "_id",
-            foreignField: "book",
-            as: "reviews",
-          },
-        },
-        {
-          $addFields: {
-            rating: { $avg: "$reviews.rating" },
-            numReviews: { $size: "$reviews" },
-          },
-        },
-        {
-          $lookup: {
-            from: "authors",
-            localField: "author",
-            foreignField: "_id",
-            as: "author",
-          },
-        },
-        {
-          $lookup: {
-            from: "categories",
-            localField: "category",
-            foreignField: "_id",
-            as: "category",
-          },
-        },
-        {
-          $addFields: {
-            author: { $arrayElemAt: ["$author", 0] },
-            category: { $arrayElemAt: ["$category", 0] },
-          },
-        },
-        {
-          $project: {
-            _id: 1,
-            title: 1,
-            description: 1,
-            coverImage: 1,
-            price: 1,
-            rating: { $ifNull: ["$rating", 0] },
-            numReviews: { $ifNull: ["$numReviews", 0] },
-            author: { _id: 1, name: 1 },
-            category: { _id: 1, name: 1 },
-            tags: 1,
-          },
-        },
-        { $sort: { rating: -1, numReviews: -1 } },
-        { $limit: 10 },
-      ]);
-
-      holidayBooks.push(...keywordBooks);
-    }
+    const responseContext =
+      holidayContext.isHoliday || holidayContext.isNearHoliday
+        ? {
+            isHoliday: holidayContext.isHoliday,
+            isNearHoliday: holidayContext.isNearHoliday,
+            holidayName: holidayContext.holidayName,
+            daysUntil: holidayContext.daysUntil,
+            tags: holidayContext.tags,
+            modelTokens: debug.tokens,
+          }
+        : {
+            isHoliday: false,
+            isNearHoliday: false,
+            holidayName: "Sách nổi bật",
+            tags: ["trending", "popular"],
+            modelTokens: debug.tokens,
+          };
 
     res.status(200).json({
-      data: holidayBooks.slice(0, 20),
-      context: {
-        isHoliday: holidayContext.isHoliday,
-        isNearHoliday: holidayContext.isNearHoliday,
-        holidayName: holidayContext.holidayName,
-        daysUntil: holidayContext.daysUntil,
-        tags: holidayContext.tags,
-      },
+      data: books,
+      context: responseContext,
     });
   } catch (error) {
     console.error("Contextual recommendation error:", error);

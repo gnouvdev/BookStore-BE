@@ -56,7 +56,9 @@ const createVNPayUrl = async (req, res) => {
     }
 
     if (!shippingInfo) {
-      return res.status(400).json({ error: "Shipping information is required" });
+      return res
+        .status(400)
+        .json({ error: "Shipping information is required" });
     }
 
     // Log environment variables
@@ -68,20 +70,31 @@ const createVNPayUrl = async (req, res) => {
     });
 
     // Configuration
-    const tmnCode = process.env.VNPAY_TMN_CODE || "YXJQCNL5";
-    const secretKey = process.env.VNPAY_HASH_SECRET || "GY7621QUP636N086DIBA2ENK2Y3R66XE";
-    const vnpUrl = process.env.VNPAY_HOST || "https://sandbox.vnpayment.vn/paymentv2/vpcpay.html";
-    const returnUrl = process.env.VNPAY_RETURN_URL || "http://localhost:5173/orders/thanks";
+    const tmnCode = process.env.VNPAY_TMN_CODE || "8MZGV9PO";
+    const secretKey =
+      process.env.VNPAY_HASH_SECRET || "72II7AP2M947ZBB0L9R896UIEIGN8FJ4";
+    const vnpUrl =
+      process.env.VNPAY_HOST ||
+      "https://sandbox.vnpayment.vn/paymentv2/vpcpay.html";
+    const returnUrl =
+      process.env.VNPAY_RETURN_URL || "http://localhost:5173/orders/thanks";
 
     // Log configuration
-    console.log("VNPay configuration:", { tmnCode, secretKey: "***", vnpUrl, returnUrl });
+    console.log("VNPay configuration:", {
+      tmnCode,
+      secretKey: "***",
+      vnpUrl,
+      returnUrl,
+    });
 
     // Calculate total amount
     const totalAmount = await calculateTotalAmount(orderItems);
     const orderId = `ORDER_${Date.now()}_${user._id}`;
 
     // Find VNPay payment method
-    const vnpayMethod = await mongoose.model("Payment").findById(paymentMethodId);
+    const vnpayMethod = await mongoose
+      .model("Payment")
+      .findById(paymentMethodId);
     if (!vnpayMethod || vnpayMethod.code !== "VNPAY") {
       throw new Error("Invalid VNPay payment method");
     }
@@ -146,7 +159,10 @@ const createVNPayUrl = async (req, res) => {
 
     // Create query string manually
     const signData = Object.keys(sortedParams)
-      .map((key) => `${key}=${encodeURIComponent(sortedParams[key]).replace(/%20/g, "+")}`)
+      .map(
+        (key) =>
+          `${key}=${encodeURIComponent(sortedParams[key]).replace(/%20/g, "+")}`
+      )
       .join("&");
     console.log("Sign data:", signData);
 
@@ -159,7 +175,10 @@ const createVNPayUrl = async (req, res) => {
 
     // Construct final URL
     const paymentUrl = `${vnpUrl}?${Object.keys(sortedParams)
-      .map((key) => `${key}=${encodeURIComponent(sortedParams[key]).replace(/%20/g, "+")}`)
+      .map(
+        (key) =>
+          `${key}=${encodeURIComponent(sortedParams[key]).replace(/%20/g, "+")}`
+      )
       .join("&")}`;
     console.log("Payment URL created:", paymentUrl);
 
@@ -189,9 +208,13 @@ const handleVNPayIPN = async (req, res) => {
     // Sort parameters
     vnpParams = sortObject(vnpParams);
 
-    const secretKey = process.env.VNPAY_HASH_SECRET || "GY7621QUP636N086DIBA2ENK2Y3R66XE";
+    const secretKey =
+      process.env.VNPAY_HASH_SECRET || "72II7AP2M947ZBB0L9R896UIEIGN8FJ4";
     const signData = Object.keys(vnpParams)
-      .map((key) => `${key}=${encodeURIComponent(vnpParams[key]).replace(/%20/g, "+")}`)
+      .map(
+        (key) =>
+          `${key}=${encodeURIComponent(vnpParams[key]).replace(/%20/g, "+")}`
+      )
       .join("&");
     const hmac = crypto.createHmac("sha512", secretKey);
     const signed = hmac.update(Buffer.from(signData, "utf-8")).digest("hex");
@@ -204,7 +227,9 @@ const handleVNPayIPN = async (req, res) => {
       const order = await mongoose.model("Order").findOne({ _id: orderId });
 
       if (!order) {
-        return res.status(200).json({ RspCode: "01", Message: "Order not found" });
+        return res
+          .status(200)
+          .json({ RspCode: "01", Message: "Order not found" });
       }
 
       if (rspCode === "00" && transactionStatus === "00") {
@@ -221,7 +246,9 @@ const handleVNPayIPN = async (req, res) => {
       } else {
         order.paymentStatus = "failed";
         await order.save();
-        return res.status(200).json({ RspCode: "02", Message: "Transaction failed" });
+        return res
+          .status(200)
+          .json({ RspCode: "02", Message: "Transaction failed" });
       }
     } else {
       return res.status(200).json({ RspCode: "97", Message: "Fail checksum" });
@@ -245,9 +272,13 @@ const handleVNPayReturn = async (req, res) => {
     // Sort parameters
     vnpParams = sortObject(vnpParams);
 
-    const secretKey = process.env.VNPAY_HASH_SECRET || "GY7621QUP636N086DIBA2ENK2Y3R66XE";
+    const secretKey =
+      process.env.VNPAY_HASH_SECRET || "72II7AP2M947ZBB0L9R896UIEIGN8FJ4";
     const signData = Object.keys(vnpParams)
-      .map((key) => `${key}=${encodeURIComponent(vnpParams[key]).replace(/%20/g, "+")}`)
+      .map(
+        (key) =>
+          `${key}=${encodeURIComponent(vnpParams[key]).replace(/%20/g, "+")}`
+      )
       .join("&");
     const hmac = crypto.createHmac("sha512", secretKey);
     const signed = hmac.update(Buffer.from(signData, "utf-8")).digest("hex");
@@ -260,11 +291,15 @@ const handleVNPayReturn = async (req, res) => {
           : `${process.env.FRONTEND_URL}/payment/failed?errorCode=${rspCode}`;
       return res.redirect(redirectUrl);
     } else {
-      return res.redirect(`${process.env.FRONTEND_URL}/payment/failed?errorCode=97`);
+      return res.redirect(
+        `${process.env.FRONTEND_URL}/payment/failed?errorCode=97`
+      );
     }
   } catch (error) {
     console.error("VNPay return URL error:", error);
-    return res.redirect(`${process.env.FRONTEND_URL}/payment/failed?errorCode=99`);
+    return res.redirect(
+      `${process.env.FRONTEND_URL}/payment/failed?errorCode=99`
+    );
   }
 };
 

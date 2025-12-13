@@ -1,7 +1,3 @@
-/**
- * Utility để phát hiện ngày lễ và trả về tags/keywords liên quan
- * Hỗ trợ các ngày lễ Việt Nam và quốc tế
- */
 
 /**
  * Lấy thông tin ngày lễ dựa trên ngày hiện tại
@@ -26,8 +22,8 @@ function getHolidayContext() {
     });
   }
 
-  // Tết Nguyên Đán (khoảng cuối tháng 1 - đầu tháng 2, tính gần đúng)
-  // Thường rơi vào khoảng 20/1 - 20/2 dương lịch
+  // Tết Nguyên Đán 
+
   if (month === 1 && day >= 20) {
     holidays.push({
       name: "Tết Nguyên Đán",

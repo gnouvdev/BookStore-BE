@@ -1,6 +1,9 @@
 const Order = require("../orders/order.model");
 const Book = require("../books/book.model");
 const User = require("../users/user.model");
+const SearchHistory = require("../searchHistory/searchHistory.model");
+const ViewHistory = require("../viewHistory/viewHistory.model");
+const Chat = require("../chat/chat.model");
 const ExcelJS = require("exceljs");
 
 // Hàm helper để tạo điều kiện lọc theo ngày
@@ -563,6 +566,408 @@ const exportReport = async (req, res) => {
   }
 };
 
+const getBusinessInsights = async (req, res) => {
+  try {
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const previousMonthStart = new Date(
+      now.getFullYear(),
+      now.getMonth() - 1,
+      1
+    );
+    const previousMonthEnd = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      0,
+      23,
+      59,
+      59,
+      999
+    );
+
+    const [
+      searchCurrent,
+      searchPrev,
+      viewsCurrent,
+      wishlistAgg,
+      chatbotAgg,
+      ordersCurrent,
+      ordersPrev,
+      trendingBooks,
+      ordersByDay,
+      ordersByCategoryCurrent,
+      ordersByCategoryPrev,
+    ] = await Promise.all([
+      SearchHistory.aggregate([
+        { $match: { timestamp: { $gte: startOfMonth } } },
+        { $group: { _id: "$query", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 20 },
+      ]),
+      SearchHistory.aggregate([
+        {
+          $match: {
+            timestamp: { $gte: previousMonthStart, $lte: previousMonthEnd },
+          },
+        },
+        { $group: { _id: "$query", count: { $sum: 1 } } },
+      ]),
+      ViewHistory.aggregate([
+        { $match: { timestamp: { $gte: startOfMonth } } },
+        { $group: { _id: "$book", views: { $sum: 1 } } },
+        { $sort: { views: -1 } },
+        { $limit: 50 },
+      ]),
+      User.aggregate([
+        { $match: { wishlist: { $exists: true, $ne: [] } } },
+        { $unwind: "$wishlist" },
+        { $group: { _id: "$wishlist", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 20 },
+      ]),
+      Chat.aggregate([
+        {
+          $match: {
+            senderId: "chatbot",
+            books: { $exists: true, $ne: [] },
+            createdAt: { $gte: startOfMonth },
+          },
+        },
+        { $unwind: "$books" },
+        {
+          $group: {
+            _id: "$books._id",
+            count: { $sum: 1 },
+            title: { $first: "$books.title" },
+          },
+        },
+        { $sort: { count: -1 } },
+        { $limit: 20 },
+      ]),
+      Order.aggregate([
+        { $match: { createdAt: { $gte: startOfMonth } } },
+        { $unwind: "$productIds" },
+        {
+          $group: {
+            _id: "$productIds.productId",
+            quantity: { $sum: "$productIds.quantity" },
+          },
+        },
+      ]),
+      Order.aggregate([
+        {
+          $match: {
+            createdAt: { $gte: previousMonthStart, $lte: previousMonthEnd },
+          },
+        },
+        { $unwind: "$productIds" },
+        {
+          $group: {
+            _id: "$productIds.productId",
+            quantity: { $sum: "$productIds.quantity" },
+          },
+        },
+      ]),
+      Book.find({ trending: true })
+        .sort({ updatedAt: -1 })
+        .limit(10)
+        .populate("author", "name")
+        .populate("category", "name")
+        .lean(),
+      Order.aggregate([
+        { $match: { createdAt: { $gte: startOfMonth } } },
+        {
+          $project: {
+            day: { $dayOfMonth: "$createdAt" },
+          },
+        },
+        {
+          $group: {
+            _id: "$day",
+            count: { $sum: 1 },
+          },
+        },
+        { $sort: { count: -1 } },
+        { $limit: 10 },
+      ]),
+      Order.aggregate([
+        { $match: { createdAt: { $gte: startOfMonth } } },
+        { $unwind: "$productIds" },
+        {
+          $lookup: {
+            from: "books",
+            localField: "productIds.productId",
+            foreignField: "_id",
+            as: "book",
+          },
+        },
+        { $unwind: "$book" },
+        {
+          $lookup: {
+            from: "categories",
+            localField: "book.category",
+            foreignField: "_id",
+            as: "category",
+          },
+        },
+        { $unwind: "$category" },
+        {
+          $group: {
+            _id: "$category.name",
+            quantity: { $sum: "$productIds.quantity" },
+          },
+        },
+        { $sort: { quantity: -1 } },
+      ]),
+      Order.aggregate([
+        {
+          $match: {
+            createdAt: { $gte: previousMonthStart, $lte: previousMonthEnd },
+          },
+        },
+        { $unwind: "$productIds" },
+        {
+          $lookup: {
+            from: "books",
+            localField: "productIds.productId",
+            foreignField: "_id",
+            as: "book",
+          },
+        },
+        { $unwind: "$book" },
+        {
+          $lookup: {
+            from: "categories",
+            localField: "book.category",
+            foreignField: "_id",
+            as: "category",
+          },
+        },
+        { $unwind: "$category" },
+        {
+          $group: {
+            _id: "$category.name",
+            quantity: { $sum: "$productIds.quantity" },
+          },
+        },
+      ]),
+    ]);
+
+    const bookIdSet = new Set();
+    const addId = (value) => {
+      if (!value) return;
+      const str = value.toString();
+      if (str) bookIdSet.add(str);
+    };
+
+    viewsCurrent.forEach((item) => addId(item._id));
+    wishlistAgg.forEach((item) => addId(item._id));
+    chatbotAgg.forEach((item) => addId(item._id));
+    ordersCurrent.forEach((item) => addId(item._id));
+
+    const referencedBooks = await Book.find({
+      _id: { $in: Array.from(bookIdSet) },
+    })
+      .populate("author", "name")
+      .populate("category", "name")
+      .lean();
+
+    const bookMap = new Map(
+      referencedBooks.map((book) => [book._id.toString(), book])
+    );
+
+    const searchPrevMap = new Map(
+      searchPrev.map((item) => [item._id, item.count])
+    );
+
+    const searchTrends = searchCurrent.slice(0, 6).map((item) => {
+      const prev = searchPrevMap.get(item._id) || 0;
+      const change = prev === 0 ? 100 : ((item.count - prev) / prev) * 100;
+      return {
+        query: item._id,
+        count: item.count,
+        change: Number(change.toFixed(1)),
+      };
+    });
+
+    const wishlistCountMap = new Map(
+      wishlistAgg.map((item) => [item._id?.toString(), item.count])
+    );
+    const viewMap = new Map(
+      viewsCurrent.map((item) => [item._id?.toString(), item.views])
+    );
+    const orderMap = new Map(
+      ordersCurrent.map((item) => [item._id?.toString(), item.quantity])
+    );
+
+    const wishlistLeaders = wishlistAgg.slice(0, 5).map((item) => ({
+      bookId: item._id?.toString(),
+      count: item.count,
+      book: bookMap.get(item._id?.toString()) || null,
+    }));
+
+    const chatbotHot = chatbotAgg.slice(0, 5).map((item) => ({
+      bookId: item._id?.toString(),
+      hits: item.count,
+      title: item.title,
+      book: bookMap.get(item._id?.toString()) || null,
+    }));
+
+    const lowConversion = viewsCurrent
+      .filter((item) => item.views >= 5)
+      .map((item) => {
+        const id = item._id?.toString();
+        const sold = orderMap.get(id) || 0;
+        const conversion = item.views
+          ? Number(((sold / item.views) * 100).toFixed(1))
+          : 0;
+        return {
+          bookId: id,
+          views: item.views,
+          sold,
+          conversion,
+          book: bookMap.get(id) || null,
+        };
+      })
+      .filter((item) => item.sold <= 1)
+      .sort((a, b) => b.views - a.views)
+      .slice(0, 5);
+
+    const topInsights = [];
+    if (searchTrends[0]) {
+      const trend = searchTrends[0];
+      const direction = trend.change >= 0 ? "tăng" : "giảm";
+      topInsights.push(
+        `🔥 "${trend.query}" ${direction} ${Math.abs(
+          trend.change
+        )}% lượt tìm kiếm so với tháng trước.`
+      );
+    }
+    if (lowConversion[0]?.book) {
+      topInsights.push(
+        `⚠️ "${lowConversion[0].book.title}" được xem ${lowConversion[0].views} lần nhưng hầu như chưa có đơn. Nên xem lại giá hoặc banner.`
+      );
+    }
+    if (wishlistLeaders[0]?.book) {
+      topInsights.push(
+        `💖 "${wishlistLeaders[0].book.title}" đang có ${wishlistLeaders[0].count} người thêm wishlist.`
+      );
+    }
+    if (chatbotHot[0]) {
+      topInsights.push(
+        `🤖 Chatbot giới thiệu "${
+          chatbotHot[0].book?.title || chatbotHot[0].title
+        }" ${chatbotHot[0].hits} lần trong tháng này.`
+      );
+    }
+
+    const trendingList = trendingBooks.map((book) => ({
+      bookId: book._id.toString(),
+      book,
+    }));
+
+    const recommendations = {
+      stockUp: wishlistLeaders.slice(0, 3).map((item) => ({
+        title: item.book?.title || "Sách",
+        reason: `${item.count} lượt wishlist`,
+      })),
+      highlight: [
+        ...chatbotHot.slice(0, 2).map((item) => ({
+          title: item.book?.title || item.title,
+          reason: "Chatbot gợi ý nhiều, nên pin banner",
+        })),
+        ...trendingList.slice(0, 2).map((item) => ({
+          title: item.book.title,
+          reason: "Đang có nhãn trending",
+        })),
+      ],
+      drop: [],
+      timing: [],
+    };
+
+    const categoryTotals = {};
+    referencedBooks.forEach((book) => {
+      const categoryName = book.category?.name || "Khác";
+      if (!categoryTotals[categoryName]) {
+        categoryTotals[categoryName] = { views: 0, wishlist: 0, sold: 0 };
+      }
+      const key = book._id.toString();
+      categoryTotals[categoryName].views += viewMap.get(key) || 0;
+      categoryTotals[categoryName].wishlist += wishlistCountMap.get(key) || 0;
+      categoryTotals[categoryName].sold += orderMap.get(key) || 0;
+    });
+
+    const dropCandidates = Object.entries(categoryTotals)
+      .filter(
+        ([, value]) =>
+          value.views < 3 && value.wishlist === 0 && value.sold === 0
+      )
+      .map(([category, stats]) => ({
+        category,
+        stats,
+      }))
+      .slice(0, 3);
+
+    recommendations.drop = dropCandidates.map((candidate) => ({
+      title: candidate.category,
+      reason: "Ít lượt xem/wishlist, cân nhắc giảm tồn",
+    }));
+
+    const ordersByDayWindow = {};
+    ordersByDay.forEach((entry) => {
+      if (!entry?._id) return;
+      const window =
+        entry._id <= 10 ? "01-10" : entry._id <= 20 ? "11-20" : "21-31";
+      ordersByDayWindow[window] =
+        (ordersByDayWindow[window] || 0) + entry.count;
+    });
+
+    recommendations.timing = Object.entries(ordersByDayWindow)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 2)
+      .map(([window, count]) => ({
+        window,
+        reason: `${count} đơn trong khoảng này – nên chạy banner/flash sale`,
+      }));
+
+    const categoryPrevMap = new Map(
+      ordersByCategoryPrev.map((item) => [item._id, item.quantity])
+    );
+    const categoryTrends = ordersByCategoryCurrent.slice(0, 5).map((item) => {
+      const prev = categoryPrevMap.get(item._id) || 0;
+      const change =
+        prev === 0
+          ? 100
+          : Number((((item.quantity - prev) / prev) * 100).toFixed(1));
+      return {
+        category: item._id,
+        quantity: item.quantity,
+        change,
+      };
+    });
+
+    res.status(200).json({
+      timeframe: {
+        currentMonth: startOfMonth,
+        previousMonthStart,
+      },
+      topInsights,
+      metrics: {
+        searchTrends,
+        wishlistLeaders,
+        chatbotHot,
+        lowConversion,
+        trendingBooks: trendingList,
+        categoryTrends,
+      },
+      recommendations,
+    });
+  } catch (error) {
+    console.error("Error generating business insights:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
+
 module.exports = {
   getDashboardOverview,
   getMonthlySales,
@@ -570,4 +975,5 @@ module.exports = {
   getTopSellingBooks,
   getUsers,
   exportReport,
+  getBusinessInsights,
 };

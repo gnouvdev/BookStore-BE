@@ -137,23 +137,42 @@ const sendMessage = async (req, res) => {
     // Nếu gửi tin nhắn đến chatbot, tự động tạo phản hồi
     if (actualReceiverId === "chatbot") {
       try {
+        console.log("Processing chatbot message:", {
+          message: message.trim(),
+          senderId,
+        });
+
         const botResponse = await chatbotService.processMessage(
           message.trim(),
           senderId
         );
 
+        console.log("Bot response received:", {
+          type: typeof botResponse,
+          hasText: !!botResponse?.text,
+          hasBooks: !!botResponse?.books,
+          booksCount: botResponse?.books?.length || 0,
+        });
+
         // Xử lý response từ bot (có thể là object hoặc string)
         let botResponseText = "";
         let botResponseBooks = [];
+        let redirectTo = null;
 
         if (typeof botResponse === "object" && botResponse !== null) {
-          botResponseText = botResponse.text || "";
-          botResponseBooks = botResponse.books || [];
+          botResponseText =
+            botResponse.text || "Xin lỗi, tôi không thể trả lời câu hỏi này.";
+          botResponseBooks = Array.isArray(botResponse.books)
+            ? botResponse.books
+            : [];
+          redirectTo = botResponse.redirectTo || null;
+        } else if (typeof botResponse === "string") {
+          botResponseText = botResponse;
         } else {
-          botResponseText = botResponse || "";
+          botResponseText = "Xin lỗi, tôi không thể trả lời câu hỏi này.";
         }
 
-        // Lưu phản hồi của bot (lưu cả text và books)
+        // Lưu phản hồi của bot (lưu cả text, books và redirectTo)
         const botMessage = new Chat({
           senderId: "chatbot",
           receiverId: senderId,
@@ -162,6 +181,7 @@ const sendMessage = async (req, res) => {
           receiverRole: senderRole,
           isRead: false,
           books: botResponseBooks || [], // Lưu books vào database
+          redirectTo: redirectTo, // Lưu redirectTo nếu có
         });
         const savedBotMessage = await botMessage.save();
 
@@ -177,7 +197,9 @@ const sendMessage = async (req, res) => {
 
           // Gửi tin nhắn của user
           io.to(userRoom).emit("newMessage", {
-            message: savedMessage,
+            message: savedMessage.toObject
+              ? savedMessage.toObject()
+              : savedMessage,
           });
 
           // Gửi phản hồi của bot (có delay nhỏ để tự nhiên hơn)
@@ -216,7 +238,70 @@ const sendMessage = async (req, res) => {
         });
       } catch (botError) {
         console.error("Error processing chatbot response:", botError);
-        // Nếu bot lỗi, vẫn trả về tin nhắn của user
+        console.error("Error stack:", botError.stack);
+
+        // Nếu bot lỗi, vẫn trả về tin nhắn của user và thông báo lỗi
+        try {
+          const errorBotMessage = new Chat({
+            senderId: "chatbot",
+            receiverId: senderId,
+            message:
+              "Xin lỗi, tôi gặp lỗi khi xử lý tin nhắn của bạn. Vui lòng thử lại sau.",
+            senderRole: "bot",
+            receiverRole: req.user.role || "user",
+            isRead: false,
+            books: [],
+          });
+          const savedErrorBotMessage = await errorBotMessage.save();
+
+          // Gửi qua socket
+          const io = req.app.get("io");
+          if (io) {
+            const userRoom = `chat:${senderId}`;
+            io.to(userRoom).emit("newMessage", {
+              message: savedMessage.toObject
+                ? savedMessage.toObject()
+                : savedMessage,
+            });
+            setTimeout(() => {
+              io.to(userRoom).emit("newMessage", {
+                message: savedErrorBotMessage.toObject
+                  ? savedErrorBotMessage.toObject()
+                  : savedErrorBotMessage,
+              });
+            }, 500);
+          }
+
+          return res.status(201).json({
+            data: {
+              userMessage: savedMessage.toObject
+                ? savedMessage.toObject()
+                : savedMessage,
+              botMessage: savedErrorBotMessage.toObject
+                ? savedErrorBotMessage.toObject()
+                : savedErrorBotMessage,
+            },
+          });
+        } catch (saveError) {
+          console.error("Error saving error bot message:", saveError);
+          // Nếu không thể lưu error message, vẫn trả về user message
+          const io = req.app.get("io");
+          if (io) {
+            const userRoom = `chat:${senderId}`;
+            io.to(userRoom).emit("newMessage", {
+              message: savedMessage.toObject
+                ? savedMessage.toObject()
+                : savedMessage,
+            });
+          }
+          return res.status(201).json({
+            data: {
+              userMessage: savedMessage.toObject
+                ? savedMessage.toObject()
+                : savedMessage,
+            },
+          });
+        }
       }
     }
 

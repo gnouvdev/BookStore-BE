@@ -7,6 +7,7 @@ const {
   getTopSellingBooks,
   getUsers,
   exportReport,
+  getBusinessInsights,
 } = require("./dashboard.controller");
 const verifyAdminToken = require("../middleware/verifyAdminToken");
 
@@ -17,5 +18,6 @@ router.get("/recent-orders", verifyAdminToken, getRecentOrders);
 router.get("/top-selling-books", verifyAdminToken, getTopSellingBooks);
 router.get("/users", verifyAdminToken, getUsers);
 router.get("/export", verifyAdminToken, exportReport);
+router.get("/business-insights", verifyAdminToken, getBusinessInsights);
 
 module.exports = router;
