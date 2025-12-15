@@ -7,6 +7,7 @@ const {
   getOrdersByUserId,
   deleteOrder,
   getOrderById,
+  cancelOrder,
 } = require("./order.controller");
 const verifyToken = require("../middleware/verifyToken");
 const verifyAdminToken = require("../middleware/verifyAdminToken");
@@ -18,6 +19,7 @@ router.post("/", verifyToken, createAOrder);
 router.get("/email/:email", verifyToken, getOrderByEmail);
 router.get("/user/:userId", verifyToken, getOrdersByUserId);
 router.get("/:id", verifyToken, getOrderById);
+router.put("/:id/cancel", verifyToken, cancelOrder); // User có thể hủy đơn hàng của mình
 
 // Admin only routes
 router.get("/", verifyAdminToken, getAllOrders);

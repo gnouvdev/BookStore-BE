@@ -9,6 +9,8 @@ const Order = require("../orders/order.model");
 const User = require("../users/user.model");
 const Voucher = require("../../vouchers/voucher.model");
 const Payment = require("../payments/payment.model");
+const vnpayController = require("../payments/vnpay.controller");
+const paymentService = require("../payments/payment.service");
 
 class ChatbotService {
   constructor() {
@@ -387,10 +389,14 @@ class ChatbotService {
     // Chuyển sang bước kiểm tra profile nhưng vẫn cho phép thêm sách
     state.step = "checking_profile";
     return {
-      text: `Tôi đã ghi nhận các sách bạn muốn đặt:\n${itemsList}\n\nTổng tiền: ${totalFormatted}\n\nBạn có muốn thêm sách nào nữa không? (Nếu không, gõ 'không' hoặc 'tiếp tục' để tôi kiểm tra thông tin của bạn)`,
+      text: `Tôi đã ghi nhận các sách bạn muốn đặt:\n${itemsList}\n\nTổng tiền: ${totalFormatted}\n\nBạn có muốn thêm sách nào nữa không?`,
       books: [],
       hasBooks: false,
       orderState: state,
+      actionButtons: [
+        { label: "Tiếp tục", value: "tiếp tục" },
+        { label: "Thêm sách", value: "thêm sách" },
+      ],
     };
   }
 
@@ -480,10 +486,14 @@ class ChatbotService {
     // Chuyển sang bước hỏi voucher
     state.step = "asking_voucher";
     return {
-      text: "Thông tin của bạn đã đầy đủ! Bạn có voucher nào để sử dụng không? (Nếu có, vui lòng gửi mã voucher. Nếu không, gõ 'không' hoặc 'bỏ qua')",
+      text: "Thông tin của bạn đã đầy đủ! Bạn có voucher nào để sử dụng không?",
       books: [],
       hasBooks: false,
       orderState: state,
+      actionButtons: [
+        { label: "Bỏ qua", value: "bỏ qua" },
+        { label: "Có voucher", value: "có voucher" },
+      ],
     };
   }
 
@@ -499,10 +509,14 @@ class ChatbotService {
     ) {
       state.step = "selecting_payment";
       return {
-        text: "Đã bỏ qua voucher. Bạn muốn thanh toán bằng phương thức nào?\n• COD (Thanh toán khi nhận hàng)\n• VNPay (Thanh toán online)\n\nVui lòng chọn một trong hai phương thức trên.",
+        text: "Đã bỏ qua voucher. Bạn muốn thanh toán bằng phương thức nào?",
         books: [],
         hasBooks: false,
         orderState: state,
+        actionButtons: [
+          { label: "COD", value: "cod" },
+          { label: "VNPay", value: "vnpay" },
+        ],
       };
     }
 
@@ -664,10 +678,14 @@ class ChatbotService {
       paymentMethod = "VNPay";
     } else {
       return {
-        text: "Vui lòng chọn phương thức thanh toán:\n• COD (Thanh toán khi nhận hàng)\n• VNPay (Thanh toán online)",
+        text: "Vui lòng chọn phương thức thanh toán:",
         books: [],
         hasBooks: false,
         orderState: state,
+        actionButtons: [
+          { label: "COD", value: "cod" },
+          { label: "VNPay", value: "vnpay" },
+        ],
       };
     }
 
@@ -685,10 +703,14 @@ class ChatbotService {
       }).format(state.finalPrice);
 
       return {
-        text: `Xác nhận đơn hàng:\n\nSản phẩm:\n${itemsList}\n\nThông tin giao hàng:\n• Họ tên: ${state.profileData.name}\n• Số điện thoại: ${state.profileData.phone}\n• Địa chỉ: ${state.profileData.address.street}, ${state.profileData.address.city}\n\nPhương thức thanh toán: COD\nTổng tiền: ${finalFormatted}\n\nBạn có chắc chắn muốn đặt hàng không? (Gõ 'xác nhận' hoặc 'đồng ý' để đặt hàng)`,
+        text: `Xác nhận đơn hàng:\n\nSản phẩm:\n${itemsList}\n\nThông tin giao hàng:\n• Họ tên: ${state.profileData.name}\n• Số điện thoại: ${state.profileData.phone}\n• Địa chỉ: ${state.profileData.address.street}, ${state.profileData.address.city}\n\nPhương thức thanh toán: COD\nTổng tiền: ${finalFormatted}\n\nBạn có chắc chắn muốn đặt hàng không?`,
         books: [],
         hasBooks: false,
         orderState: state,
+        actionButtons: [
+          { label: "Xác nhận", value: "xác nhận", variant: "primary" },
+          { label: "Hủy", value: "hủy", variant: "danger" },
+        ],
       };
     } else {
       // VNPay - cần tạo order và redirect
@@ -719,10 +741,14 @@ class ChatbotService {
       };
     } else {
       return {
-        text: "Vui lòng xác nhận đặt hàng bằng cách gõ 'xác nhận' hoặc 'đồng ý', hoặc 'hủy' để hủy đơn hàng.",
+        text: "Vui lòng xác nhận đặt hàng:",
         books: [],
         hasBooks: false,
         orderState: state,
+        actionButtons: [
+          { label: "Xác nhận", value: "xác nhận", variant: "primary" },
+          { label: "Hủy", value: "hủy", variant: "danger" },
+        ],
       };
     }
   }
@@ -828,6 +854,15 @@ class ChatbotService {
           redirectTo: "/orders/thanks",
         };
       } else {
+        // VNPay - tạo payment URL với đúng format
+        const paymentUrl = await paymentService.createVNPayPaymentUrl({
+          orderId: order._id,
+          userId: user._id,
+          shippingInfo: state.profileData,
+          paymentMethodId: payment._id,
+          ipAddr: "127.0.0.1",
+        });
+
         // VNPay - cần redirect đến trang thanh toán
         return {
           text: `Đơn hàng đã được tạo! Mã đơn hàng: ${order._id
@@ -838,7 +873,7 @@ class ChatbotService {
           hasBooks: false,
           orderCreated: true,
           orderId: order._id.toString(),
-          redirectTo: `/payments/vnpay/create`,
+          redirectTo: paymentUrl,
         };
       }
     } catch (error) {

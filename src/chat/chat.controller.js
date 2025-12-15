@@ -41,12 +41,26 @@ const getChatHistory = async (req, res) => {
 
     console.log("Chat query:", query);
 
+    // Lấy 50 message mới nhất (sort giảm dần, sau đó reverse để hiển thị tăng dần)
     const messages = await Chat.find(query)
-      .sort({ createdAt: 1 })
+      .sort({ createdAt: -1 }) // Sort giảm dần để lấy message mới nhất trước
       .limit(50)
-      .lean(); // Sử dụng lean() để trả về plain objects
+      .lean() // Sử dụng lean() để trả về plain objects
+      .then((msgs) => msgs.reverse()); // Reverse để hiển thị từ cũ đến mới
 
     console.log("Found messages:", messages.length);
+    if (messages.length > 0) {
+      console.log("Oldest message:", {
+        id: messages[0]._id,
+        createdAt: messages[0].createdAt,
+        message: messages[0].message?.substring(0, 50),
+      });
+      console.log("Newest message:", {
+        id: messages[messages.length - 1]._id,
+        createdAt: messages[messages.length - 1].createdAt,
+        message: messages[messages.length - 1].message?.substring(0, 50),
+      });
+    }
     console.log(
       "Sample message with books:",
       messages.find((m) => m.books && m.books.length > 0)
@@ -172,7 +186,7 @@ const sendMessage = async (req, res) => {
           botResponseText = "Xin lỗi, tôi không thể trả lời câu hỏi này.";
         }
 
-        // Lưu phản hồi của bot (lưu cả text, books và redirectTo)
+        // Lưu phản hồi của bot (lưu cả text, books, redirectTo và actionButtons)
         const botMessage = new Chat({
           senderId: "chatbot",
           receiverId: senderId,
@@ -182,6 +196,7 @@ const sendMessage = async (req, res) => {
           isRead: false,
           books: botResponseBooks || [], // Lưu books vào database
           redirectTo: redirectTo, // Lưu redirectTo nếu có
+          actionButtons: botResponse.actionButtons || [], // Lưu actionButtons nếu có
         });
         const savedBotMessage = await botMessage.save();
 
@@ -195,7 +210,39 @@ const sendMessage = async (req, res) => {
         if (io) {
           const userRoom = `chat:${senderId}`;
 
+          // Kiểm tra số lượng clients trong room
+          const room = io.sockets.adapter.rooms.get(userRoom);
+          let roomSize = room ? room.size : 0;
+          console.log(
+            `[Backend] Emitting to room ${userRoom}, clients in room: ${roomSize}`
+          );
+
+          // Nếu không có client trong room, thử tìm và join socket vào room (fallback)
+          if (roomSize === 0) {
+            console.warn(
+              `[Backend] No clients in room ${userRoom}, trying to find and join socket...`
+            );
+            const allSockets = await io.fetchSockets();
+            const userSocket = allSockets.find((s) => s.userId === senderId);
+            if (userSocket) {
+              console.log(
+                `[Backend] Found user socket ${userSocket.id}, forcing join to room: ${userRoom}`
+              );
+              userSocket.join(userRoom);
+              const roomAfterJoin = io.sockets.adapter.rooms.get(userRoom);
+              roomSize = roomAfterJoin ? roomAfterJoin.size : 0;
+              console.log(
+                `[Backend] After force join, clients in room: ${roomSize}`
+              );
+            } else {
+              console.error(
+                `[Backend] User socket not found for userId: ${senderId}, total sockets: ${allSockets.length}`
+              );
+            }
+          }
+
           // Gửi tin nhắn của user
+          console.log(`[Backend] Emitting user message to room: ${userRoom}`);
           io.to(userRoom).emit("newMessage", {
             message: savedMessage.toObject
               ? savedMessage.toObject()
@@ -206,15 +253,28 @@ const sendMessage = async (req, res) => {
           setTimeout(() => {
             // Books đã được lưu trong savedBotMessage khi save
             const messageWithBooks = savedBotMessage.toObject();
-            console.log("Emitting bot message with books:", {
+            console.log("[Backend] Emitting bot message with books:", {
               messageId: messageWithBooks._id,
               booksCount: messageWithBooks.books?.length || 0,
               hasBooks: !!messageWithBooks.books,
+              room: userRoom,
             });
+
+            // Kiểm tra lại số lượng clients trước khi emit
+            const roomCheck = io.sockets.adapter.rooms.get(userRoom);
+            const roomSizeCheck = roomCheck ? roomCheck.size : 0;
+            console.log(
+              `[Backend] Before emitting bot message, clients in room: ${roomSizeCheck}`
+            );
+
             io.to(userRoom).emit("newMessage", {
               message: messageWithBooks,
             });
+
+            console.log(`[Backend] Bot message emitted to room: ${userRoom}`);
           }, 500);
+        } else {
+          console.error("[Backend] Socket.io instance not found!");
         }
 
         // Đảm bảo books được trả về trong response

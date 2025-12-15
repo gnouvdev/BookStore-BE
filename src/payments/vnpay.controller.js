@@ -89,41 +89,41 @@ const createVNPayUrl = async (req, res) => {
     });
 
     // Calculate total amount
-const totalAmount = await calculateTotalAmount(orderItems);
+    const totalAmount = await calculateTotalAmount(orderItems);
 
-// Find VNPay payment method
-const vnpayMethod = await Payment.findById(paymentMethodId);
-if (!vnpayMethod || vnpayMethod.code !== "VNPAY") {
-  return res.status(400).json({ error: "Invalid VNPay payment method" });
-}
+    // Find VNPay payment method
+    const vnpayMethod = await Payment.findById(paymentMethodId);
+    if (!vnpayMethod || vnpayMethod.code !== "VNPAY") {
+      return res.status(400).json({ error: "Invalid VNPay payment method" });
+    }
 
-// Create order with pending status
-const order = new Order({
-  user: user._id,
-  name: shippingInfo.name,
-  email: shippingInfo.email,
-  address: {
-    street: shippingInfo.address?.street || "",
-    city: shippingInfo.address?.city,
-    country: shippingInfo.address?.country,
-    state: shippingInfo.address?.state,
-    zipcode: shippingInfo.address?.zipcode,
-  },
-  phone: shippingInfo.phone,
-  productIds: orderItems.map((item) => ({
-    productId: item.productId,
-    quantity: item.quantity,
-  })),
-  totalPrice: totalAmount / 100,
-  paymentMethod: vnpayMethod._id,
-  status: "pending",
-  paymentStatus: "pending",
-});
+    // Create order with pending status
+    const order = new Order({
+      user: user._id,
+      name: shippingInfo.name,
+      email: shippingInfo.email,
+      address: {
+        street: shippingInfo.address?.street || "",
+        city: shippingInfo.address?.city,
+        country: shippingInfo.address?.country,
+        state: shippingInfo.address?.state,
+        zipcode: shippingInfo.address?.zipcode,
+      },
+      phone: shippingInfo.phone,
+      productIds: orderItems.map((item) => ({
+        productId: item.productId,
+        quantity: item.quantity,
+      })),
+      totalPrice: totalAmount / 100,
+      paymentMethod: vnpayMethod._id,
+      status: "pending",
+      paymentStatus: "pending",
+    });
 
-await order.save();
+    await order.save();
 
-// VNPay MUST use string
-const orderId = order._id.toString();
+    // VNPay MUST use string
+    const orderId = order._id.toString();
 
     // Get client IP address
     const ipAddr =
@@ -245,7 +245,10 @@ const handleVNPayIPN = async (req, res) => {
         await order.save();
         return res.status(200).json({ RspCode: "00", Message: "Success" });
       } else {
+        // Thanh toán thất bại hoặc user hủy
         order.paymentStatus = "failed";
+        // Nếu đơn hàng vẫn ở trạng thái pending, giữ nguyên để user có thể hủy thủ công
+        // Không tự động đánh dấu cancelled ở IPN vì có thể user muốn thử lại
         await order.save();
         return res
           .status(200)
@@ -286,6 +289,28 @@ const handleVNPayReturn = async (req, res) => {
 
     if (secureHash === signed) {
       const rspCode = vnpParams["vnp_ResponseCode"];
+      const orderId = vnpParams["vnp_TxnRef"];
+
+      // Nếu thanh toán thất bại hoặc user hủy (rspCode != "00")
+      if (rspCode !== "00" && orderId) {
+        try {
+          const order = await mongoose.model("Order").findOne({ _id: orderId });
+          if (order && order.status === "pending") {
+            // Đánh dấu đơn hàng là cancelled nếu user hủy thanh toán
+            order.status = "cancelled";
+            order.paymentStatus = "failed";
+            await order.save();
+            console.log(`Order ${orderId} cancelled due to VNPay cancellation`);
+          }
+        } catch (orderError) {
+          console.error(
+            "Error updating order status on VNPay return:",
+            orderError
+          );
+          // Không throw error, vẫn redirect về frontend
+        }
+      }
+
       const redirectUrl =
         rspCode === "00"
           ? `${process.env.FRONTEND_URL}/payment/success`

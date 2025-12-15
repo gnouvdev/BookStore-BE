@@ -5,17 +5,18 @@ const { validateObjectId } = require("../utils/validateObjectId");
 // Get cart by user ID
 exports.getCartByUserId = async (req, res) => {
   try {
-    const firebaseId = req.user.id;
-    console.log("Getting cart for user:", firebaseId);
+    const firebaseId = req.user.firebaseId;
+    const userId = req.user.id;
+    console.log("Getting cart for user:", { firebaseId, userId });
 
     let cart = await Cart.findOne({
-      $or: [{ user: req.user.id }, { firebaseId: firebaseId }],
+      $or: [{ user: userId }, { firebaseId: firebaseId }],
     }).populate("items.book");
 
     if (!cart) {
       // Tạo giỏ hàng mới nếu chưa có
       cart = await Cart.create({
-        user: req.user.id,
+        user: userId,
         firebaseId: firebaseId,
         items: [],
       });
@@ -38,7 +39,8 @@ exports.getCartByUserId = async (req, res) => {
 exports.addToCart = async (req, res) => {
   try {
     const { bookId, quantity } = req.body;
-    const firebaseId = req.user.id;
+    const firebaseId = req.user.firebaseId;
+    const userId = req.user.id;
 
     if (!validateObjectId(bookId)) {
       return res.status(400).json({
@@ -67,12 +69,12 @@ exports.addToCart = async (req, res) => {
 
     // Tìm hoặc tạo giỏ hàng
     let cart = await Cart.findOne({
-      $or: [{ user: req.user.id }, { firebaseId: firebaseId }],
+      $or: [{ user: userId }, { firebaseId: firebaseId }],
     });
 
     if (!cart) {
       cart = await Cart.create({
-        user: req.user.id,
+        user: userId,
         firebaseId: firebaseId,
         items: [],
       });
@@ -118,9 +120,15 @@ exports.updateCartItem = async (req, res) => {
   try {
     const bookId = req.params.bookId || req.body.bookId;
     const { quantity } = req.body;
-    const firebaseId = req.user.id;
+    const firebaseId = req.user.firebaseId;
+    const userId = req.user.id;
 
-    console.log("Updating cart item:", { bookId, quantity, firebaseId });
+    console.log("Updating cart item:", {
+      bookId,
+      quantity,
+      firebaseId,
+      userId,
+    });
 
     if (!validateObjectId(bookId)) {
       return res.status(400).json({
@@ -130,7 +138,7 @@ exports.updateCartItem = async (req, res) => {
     }
 
     const cart = await Cart.findOne({
-      $or: [{ user: req.user.id }, { firebaseId: firebaseId }],
+      $or: [{ user: userId }, { firebaseId: firebaseId }],
     });
 
     if (!cart) {
@@ -180,7 +188,10 @@ exports.updateCartItem = async (req, res) => {
 exports.removeFromCart = async (req, res) => {
   try {
     const { bookId } = req.params;
-    const firebaseId = req.user.id;
+    const firebaseId = req.user.firebaseId;
+    const userId = req.user.id;
+
+    console.log("Removing item from cart:", { bookId, firebaseId, userId });
 
     if (!validateObjectId(bookId)) {
       return res.status(400).json({
@@ -190,7 +201,7 @@ exports.removeFromCart = async (req, res) => {
     }
 
     const cart = await Cart.findOne({
-      $or: [{ user: req.user.id }, { firebaseId: firebaseId }],
+      $or: [{ user: userId }, { firebaseId: firebaseId }],
     });
 
     if (!cart) {
@@ -222,10 +233,13 @@ exports.removeFromCart = async (req, res) => {
 // Clear cart
 exports.clearCart = async (req, res) => {
   try {
-    const firebaseId = req.user.id;
+    const firebaseId = req.user.firebaseId;
+    const userId = req.user.id;
+
+    console.log("Clearing cart for user:", { firebaseId, userId });
 
     const cart = await Cart.findOne({
-      $or: [{ user: req.user.id }, { firebaseId: firebaseId }],
+      $or: [{ user: userId }, { firebaseId: firebaseId }],
     });
 
     if (!cart) {

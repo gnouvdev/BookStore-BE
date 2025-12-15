@@ -36,6 +36,16 @@ const chatSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    actionButtons: {
+      type: [
+        {
+          label: String,
+          value: String,
+          variant: { type: String, default: "default" }, // default, primary, danger
+        },
+      ],
+      default: [],
+    },
   },
   {
     timestamps: true,

@@ -324,6 +324,113 @@ const getOrderById = async (req, res) => {
   }
 };
 
+const cancelOrder = async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log("Cancelling order:", {
+      orderId: id,
+      requestUser: {
+        id: req.user.id,
+        email: req.user.email,
+        role: req.user.role,
+      },
+    });
+
+    const order = await Order.findById(id)
+      .populate({
+        path: "user",
+        select: "_id firebaseId email",
+      })
+      .populate("productIds.productId")
+      .populate("paymentMethod");
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    // Kiểm tra quyền: chỉ admin hoặc chủ đơn mới được hủy
+    const isAdmin = req.user.role === "admin";
+    const isOrderOwner =
+      order.user &&
+      (order.user._id.toString() === req.user.id ||
+        order.user.firebaseId === req.user.firebaseId ||
+        order.user.email === req.user.email);
+
+    if (!isAdmin && !isOrderOwner) {
+      return res.status(403).json({
+        success: false,
+        message: "Bạn không có quyền hủy đơn hàng này",
+      });
+    }
+
+    // Chỉ cho phép hủy đơn hàng ở trạng thái pending
+    if (order.status !== "pending") {
+      return res.status(400).json({
+        success: false,
+        message: `Không thể hủy đơn hàng ở trạng thái "${order.status}". Chỉ có thể hủy đơn hàng ở trạng thái "pending".`,
+      });
+    }
+
+    // Cập nhật trạng thái đơn hàng
+    order.status = "cancelled";
+    // Nếu paymentStatus vẫn là pending, giữ nguyên hoặc đánh dấu failed
+    if (order.paymentStatus === "pending") {
+      order.paymentStatus = "failed";
+    }
+    await order.save();
+
+    console.log("Order cancelled:", {
+      orderId: order._id,
+      userEmail: order.user?.email,
+      cancelledBy: req.user.email,
+    });
+
+    // Tạo notification cho user
+    if (order.user) {
+      const notificationUserId = order.user.firebaseId;
+      const {
+        createNotification,
+      } = require("../notifications/notification.controller");
+
+      const notification = await createNotification(
+        notificationUserId,
+        `Đơn hàng #${order._id} đã được hủy`,
+        "order",
+        { orderId: order._id, status: "cancelled" }
+      );
+
+      // Gửi socket notification
+      const io = req.app.get("io");
+      if (io && notificationUserId) {
+        io.to(notificationUserId).emit("orderStatusUpdate", {
+          notificationId: notification._id,
+          message: `Đơn hàng #${order._id} đã được hủy`,
+          orderId: order._id,
+          status: "cancelled",
+          userId: notificationUserId,
+          createdAt: notification.createdAt,
+        });
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Đơn hàng đã được hủy thành công",
+      data: order,
+    });
+  } catch (error) {
+    console.error("Error cancelling order:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Error cancelling order",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   createAOrder,
   getOrderByEmail,
@@ -332,4 +439,5 @@ module.exports = {
   getOrdersByUserId,
   deleteOrder,
   getOrderById,
+  cancelOrder,
 };
