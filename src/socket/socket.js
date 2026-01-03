@@ -6,7 +6,8 @@ let io;
 const initializeSocket = (server) => {
   io = socketIO(server, {
     cors: {
-      origin: "https://bookstore-be-qg3u.onrender.com", // Frontend URL
+      origin: "book-store-fe-steel.vercel.app", // Frontend URLbook-store-fe-steel.vercel.app
+
       methods: ["GET", "POST"],
       credentials: true,
     },
