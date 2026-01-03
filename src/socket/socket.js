@@ -6,7 +6,7 @@ let io;
 const initializeSocket = (server) => {
   io = socketIO(server, {
     cors: {
-      origin: "http://localhost:5173", // Frontend URL
+      origin: "https://bookstore-be-qg3u.onrender.com", // Frontend URL
       methods: ["GET", "POST"],
       credentials: true,
     },

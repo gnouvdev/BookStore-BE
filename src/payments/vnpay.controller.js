@@ -78,7 +78,7 @@ const createVNPayUrl = async (req, res) => {
       process.env.VNPAY_HOST ||
       "https://sandbox.vnpayment.vn/paymentv2/vpcpay.html";
     const returnUrl =
-      process.env.VNPAY_RETURN_URL || "http://localhost:5173/orders/thanks";
+      process.env.VNPAY_RETURN_URL || "https://bookstore-be-qg3u.onrender.com/orders/thanks";
 
     // Log configuration
     console.log("VNPay configuration:", {
