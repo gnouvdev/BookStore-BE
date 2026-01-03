@@ -79,7 +79,7 @@ const createVNPayUrl = async (req, res) => {
       "https://sandbox.vnpayment.vn/paymentv2/vpcpay.html";
     const returnUrl =
       process.env.VNPAY_RETURN_URL ||
-      "book-store-fe-steel.vercel.app/orders/thanks";
+      "https://book-store-fe-steel.vercel.app/orders/thanks";
 
     // Log configuration
     console.log("VNPay configuration:", {
