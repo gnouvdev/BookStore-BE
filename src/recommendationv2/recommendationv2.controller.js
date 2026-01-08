@@ -449,7 +449,7 @@ exports.getCollaborativeRecommendations = async (req, res) => {
       }
     });
 
-    // Sắp xếp books theo score
+    // Sắp xếp books theo score (từ cao xuống thấp)
     const cfRanked = Object.entries(bookScores)
       .sort((a, b) => b[1].score - a[1].score)
       .map(([bookId, data]) => ({
@@ -457,21 +457,32 @@ exports.getCollaborativeRecommendations = async (req, res) => {
         cfScore: data.score,
       }));
 
-    console.log(
-      `Found ${recommendedBooks.length} books from collaborative filtering`
-    );
+    // Loại trùng lặp
+    const seen = new Set();
+    const dedupedCF = cfRanked.filter((item) => {
+      if (seen.has(item.bookId)) return false;
+      seen.add(item.bookId);
+      return true;
+    });
+
+    console.log(`Found ${dedupedCF.length} books from collaborative filtering`);
+
+    // Tạo finalCandidates từ dedupedCF (đã sắp xếp theo score từ cao xuống thấp)
+    let finalCandidates = [...dedupedCF];
 
     // Nếu không đủ, thêm content-based recommendations dựa trên user preferences
-    if (recommendedBooks.length < 10) {
+    if (dedupedCF.length < 10) {
       console.log(
         "Adding content-based recommendations based on user preferences"
       );
+      const existingBookIds = new Set([
+        ...dedupedCF.map((item) => item.bookId),
+        ...userBookIdsArray,
+      ]);
+
       const contentBasedBooks = await Book.find({
         _id: {
-          $nin: [
-            ...recommendedBooks.map((id) => new mongoose.Types.ObjectId(id)),
-            ...userBookIdsArray.map((id) => new mongoose.Types.ObjectId(id)),
-          ],
+          $nin: existingBookIds.map((id) => new mongoose.Types.ObjectId(id)),
         },
         $or: [
           ...(userPreferences.categories.size > 0
@@ -495,39 +506,35 @@ exports.getCollaborativeRecommendations = async (req, res) => {
         .limit(20)
         .lean();
 
-      const contentBasedIds = contentBasedBooks.map((b) => b._id.toString());
-      // Thêm vào đầu để ưu tiên
-      let finalCandidates = [...dedupedCF];
-
+      // Thêm content-based books vào cuối (vì có cfScore = 0, sẽ đứng sau)
       contentBasedBooks.forEach((b) => {
         const id = b._id.toString();
-        if (!seen.has(id)) {
+        if (!existingBookIds.has(id)) {
           finalCandidates.push({
             bookId: id,
             cfScore: 0,
           });
-          seen.add(id);
+          existingBookIds.add(id);
         }
       });
 
       console.log(
-        `Added ${contentBasedIds.length} content-based recommendations`
+        `Added ${contentBasedBooks.length} content-based recommendations`
       );
     }
 
-    // Loại trùng lặp
-    const seen = new Set();
-    const dedupedCF = cfRanked.filter((item) => {
-      if (seen.has(item.bookId)) return false;
-      seen.add(item.bookId);
-      return true;
-    });
+    // Tạo map từ finalCandidates để giữ thứ tự và cfScore
+    const candidateMap = new Map(
+      finalCandidates.map((item) => [item.bookId, item.cfScore])
+    );
 
     let books = await Book.aggregate([
       {
         $match: {
           _id: {
-            $in: finalCandidates.map((item) => new ObjectId(item.bookId)),
+            $in: finalCandidates.map(
+              (item) => new mongoose.Types.ObjectId(item.bookId)
+            ),
           },
         },
       },
@@ -589,9 +596,13 @@ exports.getCollaborativeRecommendations = async (req, res) => {
       Object.entries(bookScores).map(([id, data]) => [id, data.score])
     );
 
+    // Map books với cfScore từ candidateMap và tính các scores
     books.forEach((book) => {
-      let personalizationScore = 0;
       const bookId = book._id.toString();
+      // Lấy cfScore từ candidateMap (đã được sắp xếp từ cao xuống thấp)
+      book._cfScore = candidateMap.get(bookId) || 0;
+
+      let personalizationScore = 0;
 
       // Boost nếu match với user preferences
       if (userPreferences.categories.has(book.category?.name)) {
@@ -623,23 +634,26 @@ exports.getCollaborativeRecommendations = async (req, res) => {
         personalizationScore + collaborativeScore + trendingBoost + ratingBoost;
     });
 
-    // Sắp xếp theo final score
-    orderedBooks.sort((a, b) => {
+    // Sắp xếp theo cfScore từ cao xuống thấp (đảm bảo thứ tự đúng)
+    // Nếu cfScore bằng nhau, sắp xếp theo finalScore
+    books.sort((a, b) => {
+      // Ưu tiên cfScore trước (sách có collaborative score cao hơn đứng trước)
       if (Math.abs(b._cfScore - a._cfScore) > 0.0001) {
         return b._cfScore - a._cfScore;
       }
+      // Nếu cfScore bằng nhau, sắp xếp theo finalScore
       return b._finalScore - a._finalScore;
     });
-    const lockedTop = orderedBooks.slice(0, 3);
-    const rest = orderedBooks.slice(3);
 
     // Đảm bảo diversity: không quá nhiều books cùng category/author
+    // Nhưng vẫn giữ thứ tự theo cfScore (sách có score cao nhất đứng đầu)
     const finalBooks = [];
     const categoryCount = {};
     const authorCount = {};
     const MAX_PER_CATEGORY = 3;
     const MAX_PER_AUTHOR = 2;
 
+    // Vòng 1: Lấy sách theo thứ tự cfScore, áp dụng diversity filter
     for (const book of books) {
       const category = book.category?.name || "unknown";
       const author = book.author?.name || "unknown";
@@ -656,10 +670,11 @@ exports.getCollaborativeRecommendations = async (req, res) => {
       }
     }
 
-    // Nếu chưa đủ, thêm books còn lại (không cần diversity check)
+    // Vòng 2: Nếu chưa đủ, thêm books còn lại theo thứ tự cfScore (không cần diversity check)
     if (finalBooks.length < 10) {
+      const finalBookIds = new Set(finalBooks.map((b) => b._id.toString()));
       for (const book of books) {
-        if (!finalBooks.some((b) => b._id.toString() === book._id.toString())) {
+        if (!finalBookIds.has(book._id.toString())) {
           finalBooks.push(book);
           if (finalBooks.length >= 10) break;
         }
@@ -781,16 +796,15 @@ exports.getCollaborativeRecommendations = async (req, res) => {
         { $sort: { trending: -1, rating: -1, numReviews: -1 } },
         { $limit: 10 - finalBooks.length },
       ]);
-      const bookMap = new Map(books.map((b) => [b._id.toString(), b]));
 
-      let orderedBooks = finalCandidates
-        .map((item) => {
-          const book = bookMap.get(item.bookId);
-          if (!book) return null;
-          book._cfScore = item.cfScore;
-          return book;
-        })
-        .filter(Boolean);
+      // Thêm additionalBooks vào cuối (có cfScore = 0)
+      additionalBooks.forEach((book) => {
+        book._cfScore = 0;
+        book._personalizationScore = 0;
+        book._collaborativeScore = 0;
+        book._finalScore =
+          (book.rating || 0) * 0.05 + (book.trending ? 0.1 : 0);
+      });
 
       finalBooks.push(...additionalBooks);
     }
