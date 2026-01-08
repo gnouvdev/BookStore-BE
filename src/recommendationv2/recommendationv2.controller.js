@@ -483,7 +483,10 @@ exports.getCollaborativeRecommendations = async (req, res) => {
 
       const contentBasedBooks = await Book.find({
         _id: {
-          $nin: existingBookIds.map((id) => new mongoose.Types.ObjectId(id)),
+          // existingBookIds là Set, cần chuyển sang mảng trước khi map
+          $nin: Array.from(existingBookIds).map(
+            (id) => new mongoose.Types.ObjectId(id)
+          ),
         },
         $or: [
           ...(userPreferences.categories.size > 0
