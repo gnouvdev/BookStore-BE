@@ -706,47 +706,27 @@ exports.getCollaborativeRecommendations = async (req, res) => {
       `Recommended ${finalBooks.length} books (${personalizedCount} personalized)`
     );
 
-    // Nếu không đủ gợi ý, bổ sung sách phổ biến dựa trên user preferences
-    if (finalBooks.length < 5) {
-      console.log("Supplementing with popular books");
-      // Fallback: tìm sách phổ biến nhưng ưu tiên match với user preferences
-      const fallbackMatch = {
-        _id: {
-          $nin: [
-            ...finalBooks.map((b) => b._id),
-            ...userBookIdsArray.map((id) => new mongoose.Types.ObjectId(id)),
-          ],
-        },
-      };
+    // Nếu không đủ 10 quyển, bổ sung sách phổ biến để đủ 10 quyển
+    // Collaborative filtering books đã đứng đầu, giờ bổ sung sách phổ biến vào cuối
+    if (finalBooks.length < 10) {
+      console.log(
+        `Supplementing with popular books to reach 10 (currently ${finalBooks.length})`
+      );
+      const existingBookIds = new Set([
+        ...finalBooks.map((b) => b._id.toString()),
+        ...userBookIdsArray,
+      ]);
 
-      // Nếu có user preferences, ưu tiên match
-      if (
-        userPreferences.categories.size > 0 ||
-        userPreferences.authors.size > 0 ||
-        userPreferences.tags.size > 0
-      ) {
-        fallbackMatch.$or = [
-          ...(userPreferences.categories.size > 0
-            ? [
-                {
-                  "category.name": {
-                    $in: Array.from(userPreferences.categories),
-                  },
-                },
-              ]
-            : []),
-          ...(userPreferences.authors.size > 0
-            ? [{ "author.name": { $in: Array.from(userPreferences.authors) } }]
-            : []),
-          ...(userPreferences.tags.size > 0
-            ? [{ tags: { $in: Array.from(userPreferences.tags) } }]
-            : []),
-        ];
-      }
-
-      const additionalBooks = await Book.aggregate([
+      // Tìm sách phổ biến (không có trong danh sách đã có)
+      const popularBooks = await Book.aggregate([
         {
-          $match: fallbackMatch,
+          $match: {
+            _id: {
+              $nin: Array.from(existingBookIds).map(
+                (id) => new mongoose.Types.ObjectId(id)
+              ),
+            },
+          },
         },
         {
           $lookup: {
@@ -795,14 +775,16 @@ exports.getCollaborativeRecommendations = async (req, res) => {
             numReviews: { $ifNull: ["$numReviews", 0] },
             author: { _id: 1, name: 1 },
             category: { _id: 1, name: 1 },
+            tags: 1,
+            trending: 1,
           },
         },
         { $sort: { trending: -1, rating: -1, numReviews: -1 } },
         { $limit: 10 - finalBooks.length },
       ]);
 
-      // Thêm additionalBooks vào cuối (có cfScore = 0)
-      additionalBooks.forEach((book) => {
+      // Thêm popularBooks vào cuối (có cfScore = 0, sẽ đứng sau collaborative books)
+      popularBooks.forEach((book) => {
         book._cfScore = 0;
         book._personalizationScore = 0;
         book._collaborativeScore = 0;
@@ -810,7 +792,10 @@ exports.getCollaborativeRecommendations = async (req, res) => {
           (book.rating || 0) * 0.05 + (book.trending ? 0.1 : 0);
       });
 
-      finalBooks.push(...additionalBooks);
+      finalBooks.push(...popularBooks);
+      console.log(
+        `Added ${popularBooks.length} popular books. Total: ${finalBooks.length}`
+      );
     }
 
     // Đảm bảo trả về đúng finalBooks
