@@ -208,7 +208,8 @@ exports.getCollaborativeRecommendations = async (req, res) => {
     });
 
     // Nếu không đủ dữ liệu, trả về sách phổ biến
-    if (Object.keys(userBookIds).length < 3) {
+    // Giảm yêu cầu tối thiểu để vẫn gợi ý khi user chỉ mới mua 1-2 sách
+    if (Object.keys(userBookIds).length < 1) {
       console.log("Not enough user data, returning popular books");
       const popularBooks = await Book.find()
         .sort({ numReviews: -1, rating: -1 })
@@ -360,7 +361,7 @@ exports.getCollaborativeRecommendations = async (req, res) => {
     }
 
     // Lọc similarities với threshold tối thiểu (tăng lên để chọn users thực sự similar)
-    const MIN_SIMILARITY_THRESHOLD = 0.15; // Chỉ chọn users có similarity >= 0.15
+    const MIN_SIMILARITY_THRESHOLD = 0.05; // Giảm ngưỡng để có gợi ý khi dữ liệu ít
     const validSimilarities = Object.entries(similarities)
       .filter(([_, sim]) => sim >= MIN_SIMILARITY_THRESHOLD)
       .sort((a, b) => b[1] - a[1]);
