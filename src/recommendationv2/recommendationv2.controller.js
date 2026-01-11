@@ -127,6 +127,7 @@ exports.getCollaborativeRecommendations = async (req, res) => {
         cart.items.forEach((item) => {
           if (item.book && item.book._id) {
             const bookId = item.book._id.toString();
+            //Giỏ hàng
             const weight = 0.8 * timeDecay;
             userBookIds[bookId] = Math.max(userBookIds[bookId] || 0, weight);
           }
