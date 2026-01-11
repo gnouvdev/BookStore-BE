@@ -124,6 +124,10 @@ function getHolidayContext() {
         "thiếu niên",
         "giáo dục trẻ em",
         "sách thiếu nhi",
+        "tuổi trẻ",
+        "tuổi thơ",
+        "truyện tranh",
+        "hoạt hình",
       ],
     });
   }
