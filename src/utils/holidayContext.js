@@ -1,12 +1,16 @@
-
 /**
  * Lấy thông tin ngày lễ dựa trên ngày hiện tại
  * @returns {Object} { isHoliday: boolean, isNearHoliday: boolean, holidayName: string, upcomingHoliday: Object, tags: string[], daysUntil: number }
  */
 function getHolidayContext() {
-  const now = new Date();
-  const month = now.getMonth() + 1; // 1-12
+  // TEST: giả lập ngày 1/6
+  const now = new Date(2025, 5, 1); // 1/6/2025
+
+  const month = now.getMonth() + 1;
   const day = now.getDate();
+  // const now = new Date();
+  // const month = now.getMonth() + 1; // 1-12
+  // const day = now.getDate();
   const year = now.getFullYear();
 
   // Tính ngày lễ di động (âm lịch được tính gần đúng)
@@ -22,7 +26,7 @@ function getHolidayContext() {
     });
   }
 
-  // Tết Nguyên Đán 
+  // Tết Nguyên Đán
 
   if (month === 1 && day >= 20) {
     holidays.push({
