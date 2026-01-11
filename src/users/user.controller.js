@@ -113,6 +113,9 @@ const loginAdmin = async (req, res) => {
         id: user._id,
         email: user.email,
         role: user.role,
+        fullName: user.fullName,
+        displayName: user.fullName,
+        photoURL: user.photoURL,
       },
     });
   } catch (error) {
