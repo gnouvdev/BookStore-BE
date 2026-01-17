@@ -440,6 +440,8 @@ exports.getCollaborativeRecommendations = async (req, res) => {
     // Nếu hành vi quá ít (< 3) hoặc không tìm được users tương đồng → Bỏ qua CF, dùng Content-Based
     let finalCandidates = [];
     const userInteractedBookIds = new Set(Object.keys(userBookIds));
+    // Khai báo bookScores ở ngoài để dùng sau này
+    const bookScores = {}; // { bookId: { score, fromUsers: [] } }
 
     if (!USE_CONTENT_BASED_ONLY && validSimilarities.length > 0) {
       // CÓ ĐỦ HÀNH VI VÀ TÌM ĐƯỢC USERS TƯƠNG ĐỒNG → Dùng Collaborative Filtering
@@ -453,7 +455,6 @@ exports.getCollaborativeRecommendations = async (req, res) => {
         .map(([userId, similarity]) => ({ userId, similarity }));
 
       // Thu thập sách gợi ý với weighted scoring
-      const bookScores = {}; // { bookId: { score, fromUsers: [] } }
 
       topSimilarUsers.forEach(({ userId, similarity }) => {
         const books = otherUsersBooks[userId];
@@ -523,7 +524,7 @@ exports.getCollaborativeRecommendations = async (req, res) => {
         "Adding content-based recommendations based on user preferences"
       );
       const existingBookIds = new Set([
-        ...filteredCF.map((item) => item.bookId),
+        ...finalCandidates.map((item) => item.bookId),
         ...userBookIdsArray,
       ]);
 
@@ -642,8 +643,11 @@ exports.getCollaborativeRecommendations = async (req, res) => {
     ]);
 
     // Tính điểm ưu tiên cho mỗi book dựa trên user preferences và collaborative score
+    // Chỉ tạo bookScoresMap nếu có bookScores (từ CF)
     const bookScoresMap = new Map(
-      Object.entries(bookScores).map(([id, data]) => [id, data.score])
+      Object.keys(bookScores).length > 0
+        ? Object.entries(bookScores).map(([id, data]) => [id, data.score])
+        : []
     );
 
     // Map books với cfScore từ candidateMap và tính các scores
