@@ -48,10 +48,10 @@ exports.getCollaborativeRecommendations = async (req, res) => {
     const carts = await Cart.find({
       $or: [{ user: userId }, { firebaseId: userId }],
     }).populate("items.book");
+    // Lấy TẤT CẢ views để filter chính xác (không limit)
     const views = await ViewHistory.find({ user: userId })
       .select("book")
-      .sort({ timestamp: -1 })
-      .limit(100);
+      .sort({ timestamp: -1 });
     const searches = await SearchHistory.find({ user: userId })
       .select("query")
       .sort({ timestamp: -1 })
@@ -70,14 +70,14 @@ exports.getCollaborativeRecommendations = async (req, res) => {
     const now = Date.now();
     const DAY_MS = 24 * 60 * 60 * 1000;
 
-    // Time decay function: interaction gần đây có trọng số cao hơn
+    // Time decay theo hàm mũ với half-life T_{1/2} = 7 ngày (kết quả từ thực nghiệm offline)
+    const HALF_LIFE_DAYS = 7;
+    const LAMBDA = Math.log(2) / HALF_LIFE_DAYS;
     const getTimeDecay = (timestamp) => {
       if (!timestamp) return 1.0;
       const daysAgo = (now - new Date(timestamp).getTime()) / DAY_MS;
-      if (daysAgo < 7) return 1.0; // Tuần gần đây: 100%
-      if (daysAgo < 30) return 0.8; // Tháng gần đây: 80%
-      if (daysAgo < 90) return 0.6; // 3 tháng: 60%
-      return 0.4; // Cũ hơn: 40%
+      if (daysAgo <= 0) return 1.0;
+      return Math.exp(-LAMBDA * daysAgo);
     };
 
     // Weighting cải thiện
@@ -356,24 +356,29 @@ exports.getCollaborativeRecommendations = async (req, res) => {
       const union = new Set([...userBookSet, ...otherBookSet]);
       const jaccardSim = union.size > 0 ? intersection.size / union.size : 0;
 
-      // Kết hợp cả hai: 70% cosine, 30% jaccard
-      // Jaccard giúp phát hiện users có cùng sở thích dù interaction weights khác nhau
-      similarities[userId] = cosineSim * 0.7 + jaccardSim * 0.3;
+      // Mô hình lai: alpha * cosine + (1 - alpha) * jaccard
+      // Dữ liệu thật gợi ý Jaccard nên chiếm tỷ trọng cao hơn,
+      // do đó chọn alpha < 0.5 (ví dụ alpha = 0.3 <=> 30% cosine, 70% jaccard)
+      const ALPHA_COSINE = 0.3;
+      const hybridSim =
+        ALPHA_COSINE * cosineSim + (1 - ALPHA_COSINE) * jaccardSim;
+      similarities[userId] = hybridSim;
     }
 
-    // Lọc similarities với threshold tối thiểu (tăng lên để chọn users thực sự similar)
-    const MIN_SIMILARITY_THRESHOLD = 0.05; // Giảm ngưỡng để có gợi ý khi dữ liệu ít
+    // Lọc similarities với threshold tối thiểu (chỉ giữ các user thực sự giống)
+    // Để tránh noise làm chen lẫn thứ tự gợi ý, tăng ngưỡng trở lại
+    const MIN_SIMILARITY_THRESHOLD = 0.15;
     const validSimilarities = Object.entries(similarities)
       .filter(([_, sim]) => sim >= MIN_SIMILARITY_THRESHOLD)
       .sort((a, b) => b[1] - a[1]);
 
-    // Nếu không có users similar đủ, giảm threshold nhưng log warning
-    if (validSimilarities.length < 3) {
+    // Nếu không có đủ users similar, giảm threshold một chút nhưng vẫn giữ khá chặt
+    if (validSimilarities.length === 0) {
       console.warn(
-        `Only ${validSimilarities.length} similar users found, lowering threshold`
+        `No similar users found with threshold ${MIN_SIMILARITY_THRESHOLD}, lowering threshold to 0.1`
       );
       const lowerThreshold = Object.entries(similarities)
-        .filter(([_, sim]) => sim >= 0.05)
+        .filter(([_, sim]) => sim >= 0.1)
         .sort((a, b) => b[1] - a[1])
         .slice(0, 10);
       validSimilarities.push(...lowerThreshold);
@@ -802,6 +807,20 @@ exports.getCollaborativeRecommendations = async (req, res) => {
     // Đảm bảo trả về đúng finalBooks
     books = finalBooks;
 
+    // FILTER CUỐI CÙNG: Loại bỏ sách user đã tương tác (đảm bảo real-time)
+    // Lấy lại danh sách sách đã tương tác để filter chính xác
+    const userInteractedBookIds = new Set(Object.keys(userBookIds));
+    
+    // Lọc lại để loại bỏ sách đã tương tác
+    books = books.filter((book) => {
+      const bookId = book._id.toString();
+      return !userInteractedBookIds.has(bookId);
+    });
+
+    console.log(
+      `After filtering interacted books: ${books.length} books remaining`
+    );
+
     // Kiểm tra ngày lễ và ưu tiên sách liên quan
     const holidayContext = getHolidayContext();
     if (holidayContext.isHoliday || holidayContext.isNearHoliday) {
@@ -894,8 +913,24 @@ exports.getCollaborativeRecommendations = async (req, res) => {
         books.unshift(...newHolidayBooks);
         // Giới hạn lại số lượng
         books.splice(10);
+        
+        // FILTER LẠI: Loại bỏ sách user đã tương tác (sau khi thêm holiday books)
+        books = books.filter((book) => {
+          const bookId = book._id.toString();
+          return !userInteractedBookIds.has(bookId);
+        });
       }
     }
+
+    // FILTER CUỐI CÙNG TRƯỚC KHI TRẢ VỀ: Đảm bảo không có sách đã tương tác
+    books = books.filter((book) => {
+      const bookId = book._id.toString();
+      return !userInteractedBookIds.has(bookId);
+    });
+
+    console.log(
+      `Final recommendations: ${books.length} books (after filtering all interacted books)`
+    );
 
     res.status(200).json({
       data: books,
