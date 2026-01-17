@@ -208,16 +208,26 @@ exports.getCollaborativeRecommendations = async (req, res) => {
       uniqueBooks: Object.keys(userBookIds).length,
     });
 
-    // Nếu không đủ dữ liệu, trả về sách phổ biến
-    // Giảm yêu cầu tối thiểu để vẫn gợi ý khi user chỉ mới mua 1-2 sách
+    // Nếu user CHƯA CÓ hành vi → Trả về sách phổ biến
     if (Object.keys(userBookIds).length < 1) {
-      console.log("Not enough user data, returning popular books");
+      console.log("User has no interactions, returning popular books");
       const popularBooks = await Book.find()
         .sort({ numReviews: -1, rating: -1 })
         .limit(10)
         .populate("author", "name")
         .populate("category", "name");
       return res.status(200).json({ data: popularBooks });
+    }
+
+    // Nếu hành vi QUÁ ÍT (< 3 interactions) → Dùng Content-Based ngay (bỏ qua CF)
+    // Vì không đủ dữ liệu để tìm users tương đồng hiệu quả
+    const userInteractionCount = Object.keys(userBookIds).length;
+    const USE_CONTENT_BASED_ONLY = userInteractionCount < 3;
+
+    if (USE_CONTENT_BASED_ONLY) {
+      console.log(
+        `User has too few interactions (${userInteractionCount}), using Content-Based recommendations only`
+      );
     }
 
     // Lấy top 1000 người dùng khác có tương tác gần nhất
@@ -427,63 +437,93 @@ exports.getCollaborativeRecommendations = async (req, res) => {
       tagsCount: userPreferences.tags.size,
     });
 
-    // Lấy top similar users (tăng lên 10-15 để có diversity hơn)
-    const topSimilarUsers = validSimilarities
-      .slice(0, Math.max(10, validSimilarities.length))
-      .map(([userId, similarity]) => ({ userId, similarity }));
+    // Nếu hành vi quá ít (< 3) hoặc không tìm được users tương đồng → Bỏ qua CF, dùng Content-Based
+    let finalCandidates = [];
+    const userInteractedBookIds = new Set(Object.keys(userBookIds));
 
-    // Thu thập sách gợi ý với weighted scoring
-    const bookScores = {}; // { bookId: { score, fromUsers: [] } }
+    if (!USE_CONTENT_BASED_ONLY && validSimilarities.length > 0) {
+      // CÓ ĐỦ HÀNH VI VÀ TÌM ĐƯỢC USERS TƯƠNG ĐỒNG → Dùng Collaborative Filtering
+      console.log(
+        `Using Collaborative Filtering (${validSimilarities.length} similar users found)`
+      );
 
-    topSimilarUsers.forEach(({ userId, similarity }) => {
-      const books = otherUsersBooks[userId];
-      if (!books) return;
+      // Lấy top similar users (tăng lên 10-15 để có diversity hơn)
+      const topSimilarUsers = validSimilarities
+        .slice(0, Math.max(10, validSimilarities.length))
+        .map(([userId, similarity]) => ({ userId, similarity }));
 
-      for (const bookId in books) {
-        if (!userBookIds[bookId]) {
-          if (!bookScores[bookId]) {
-            bookScores[bookId] = { score: 0, fromUsers: [] };
+      // Thu thập sách gợi ý với weighted scoring
+      const bookScores = {}; // { bookId: { score, fromUsers: [] } }
+
+      topSimilarUsers.forEach(({ userId, similarity }) => {
+        const books = otherUsersBooks[userId];
+        if (!books) return;
+
+        for (const bookId in books) {
+          if (!userBookIds[bookId]) {
+            if (!bookScores[bookId]) {
+              bookScores[bookId] = { score: 0, fromUsers: [] };
+            }
+            // Weighted score: similarity * interaction weight
+            const interactionWeight = books[bookId];
+            bookScores[bookId].score += similarity * interactionWeight;
+            bookScores[bookId].fromUsers.push({
+              userId,
+              similarity,
+              weight: interactionWeight,
+            });
           }
-          // Weighted score: similarity * interaction weight
-          const interactionWeight = books[bookId];
-          bookScores[bookId].score += similarity * interactionWeight;
-          bookScores[bookId].fromUsers.push({
-            userId,
-            similarity,
-            weight: interactionWeight,
-          });
         }
+      });
+
+      // Sắp xếp books theo score (từ cao xuống thấp)
+      const cfRanked = Object.entries(bookScores)
+        .sort((a, b) => b[1].score - a[1].score)
+        .map(([bookId, data]) => ({
+          bookId,
+          cfScore: data.score,
+        }));
+
+      // Loại trùng lặp
+      const seen = new Set();
+      const dedupedCF = cfRanked.filter((item) => {
+        if (seen.has(item.bookId)) return false;
+        seen.add(item.bookId);
+        return true;
+      });
+
+      console.log(
+        `Found ${dedupedCF.length} books from collaborative filtering`
+      );
+
+      // FILTER TRƯỚC: Loại bỏ sách user đã tương tác từ dedupedCF
+      const filteredCF = dedupedCF.filter((item) => {
+        return !userInteractedBookIds.has(item.bookId);
+      });
+
+      finalCandidates = [...filteredCF];
+    } else {
+      // HÀNH VI QUÁ ÍT HOẶC KHÔNG TÌM ĐƯỢC USERS TƯƠNG ĐỒNG → Bỏ qua CF
+      if (USE_CONTENT_BASED_ONLY) {
+        console.log(
+          "Skipping Collaborative Filtering (too few interactions, using Content-Based only)"
+        );
+      } else {
+        console.log(
+          "Skipping Collaborative Filtering (no similar users found, using Content-Based only)"
+        );
       }
-    });
+      finalCandidates = [];
+    }
 
-    // Sắp xếp books theo score (từ cao xuống thấp)
-    const cfRanked = Object.entries(bookScores)
-      .sort((a, b) => b[1].score - a[1].score)
-      .map(([bookId, data]) => ({
-        bookId,
-        cfScore: data.score,
-      }));
-
-    // Loại trùng lặp
-    const seen = new Set();
-    const dedupedCF = cfRanked.filter((item) => {
-      if (seen.has(item.bookId)) return false;
-      seen.add(item.bookId);
-      return true;
-    });
-
-    console.log(`Found ${dedupedCF.length} books from collaborative filtering`);
-
-    // Tạo finalCandidates từ dedupedCF (đã sắp xếp theo score từ cao xuống thấp)
-    let finalCandidates = [...dedupedCF];
-
-    // Nếu không đủ, thêm content-based recommendations dựa trên user preferences
-    if (dedupedCF.length < 10) {
+    // Nếu không đủ (CF không đủ hoặc bỏ qua CF), thêm content-based recommendations
+    // Content-Based: Gợi ý sách TƯƠNG ĐỒNG với sách user đã tương tác (category/author/tags)
+    if (finalCandidates.length < 10) {
       console.log(
         "Adding content-based recommendations based on user preferences"
       );
       const existingBookIds = new Set([
-        ...dedupedCF.map((item) => item.bookId),
+        ...filteredCF.map((item) => item.bookId),
         ...userBookIdsArray,
       ]);
 
@@ -808,9 +848,8 @@ exports.getCollaborativeRecommendations = async (req, res) => {
     books = finalBooks;
 
     // FILTER CUỐI CÙNG: Loại bỏ sách user đã tương tác (đảm bảo real-time)
-    // Lấy lại danh sách sách đã tương tác để filter chính xác
-    const userInteractedBookIds = new Set(Object.keys(userBookIds));
-    
+    // Sử dụng lại userInteractedBookIds đã tạo ở trên
+
     // Lọc lại để loại bỏ sách đã tương tác
     books = books.filter((book) => {
       const bookId = book._id.toString();
@@ -820,6 +859,87 @@ exports.getCollaborativeRecommendations = async (req, res) => {
     console.log(
       `After filtering interacted books: ${books.length} books remaining`
     );
+
+    // Nếu sau khi filter không đủ 10 sách, bổ sung sách phổ biến
+    if (books.length < 10) {
+      console.log(
+        `Not enough books after filtering (${books.length}/10), supplementing with popular books`
+      );
+      const existingBookIds = new Set([
+        ...books.map((b) => b._id.toString()),
+        ...userBookIdsArray,
+      ]);
+
+      const popularBooks = await Book.aggregate([
+        {
+          $match: {
+            _id: {
+              $nin: Array.from(existingBookIds).map(
+                (id) => new mongoose.Types.ObjectId(id)
+              ),
+            },
+          },
+        },
+        {
+          $lookup: {
+            from: "reviews",
+            localField: "_id",
+            foreignField: "book",
+            as: "reviews",
+          },
+        },
+        {
+          $addFields: {
+            rating: { $avg: "$reviews.rating" },
+            numReviews: { $size: "$reviews" },
+          },
+        },
+        {
+          $lookup: {
+            from: "authors",
+            localField: "author",
+            foreignField: "_id",
+            as: "author",
+          },
+        },
+        {
+          $lookup: {
+            from: "categories",
+            localField: "category",
+            foreignField: "_id",
+            as: "category",
+          },
+        },
+        {
+          $addFields: {
+            author: { $arrayElemAt: ["$author", 0] },
+            category: { $arrayElemAt: ["$category", 0] },
+          },
+        },
+        {
+          $project: {
+            _id: 1,
+            title: 1,
+            description: 1,
+            coverImage: 1,
+            price: 1,
+            rating: { $ifNull: ["$rating", 0] },
+            numReviews: { $ifNull: ["$numReviews", 0] },
+            author: { _id: 1, name: 1 },
+            category: { _id: 1, name: 1 },
+            tags: 1,
+            trending: 1,
+          },
+        },
+        { $sort: { trending: -1, rating: -1, numReviews: -1 } },
+        { $limit: 10 - books.length },
+      ]);
+
+      books.push(...popularBooks);
+      console.log(
+        `Added ${popularBooks.length} popular books. Total: ${books.length}`
+      );
+    }
 
     // Kiểm tra ngày lễ và ưu tiên sách liên quan
     const holidayContext = getHolidayContext();
@@ -913,7 +1033,7 @@ exports.getCollaborativeRecommendations = async (req, res) => {
         books.unshift(...newHolidayBooks);
         // Giới hạn lại số lượng
         books.splice(10);
-        
+
         // FILTER LẠI: Loại bỏ sách user đã tương tác (sau khi thêm holiday books)
         books = books.filter((book) => {
           const bookId = book._id.toString();
@@ -931,6 +1051,90 @@ exports.getCollaborativeRecommendations = async (req, res) => {
     console.log(
       `Final recommendations: ${books.length} books (after filtering all interacted books)`
     );
+
+    // ĐẢM BẢO LUÔN CÓ ĐỦ 10 SÁCH: Nếu sau tất cả filter vẫn không đủ, bổ sung sách phổ biến
+    if (books.length < 10) {
+      console.log(
+        `⚠️ Warning: Only ${books.length} books after all filters. Supplementing to reach 10.`
+      );
+      const existingBookIds = new Set([
+        ...books.map((b) => b._id.toString()),
+        ...userBookIdsArray,
+      ]);
+
+      const additionalPopularBooks = await Book.aggregate([
+        {
+          $match: {
+            _id: {
+              $nin: Array.from(existingBookIds).map(
+                (id) => new mongoose.Types.ObjectId(id)
+              ),
+            },
+          },
+        },
+        {
+          $lookup: {
+            from: "reviews",
+            localField: "_id",
+            foreignField: "book",
+            as: "reviews",
+          },
+        },
+        {
+          $addFields: {
+            rating: { $avg: "$reviews.rating" },
+            numReviews: { $size: "$reviews" },
+          },
+        },
+        {
+          $lookup: {
+            from: "authors",
+            localField: "author",
+            foreignField: "_id",
+            as: "author",
+          },
+        },
+        {
+          $lookup: {
+            from: "categories",
+            localField: "category",
+            foreignField: "_id",
+            as: "category",
+          },
+        },
+        {
+          $addFields: {
+            author: { $arrayElemAt: ["$author", 0] },
+            category: { $arrayElemAt: ["$category", 0] },
+          },
+        },
+        {
+          $project: {
+            _id: 1,
+            title: 1,
+            description: 1,
+            coverImage: 1,
+            price: 1,
+            rating: { $ifNull: ["$rating", 0] },
+            numReviews: { $ifNull: ["$numReviews", 0] },
+            author: { _id: 1, name: 1 },
+            category: { _id: 1, name: 1 },
+            tags: 1,
+            trending: 1,
+          },
+        },
+        { $sort: { trending: -1, rating: -1, numReviews: -1 } },
+        { $limit: 10 - books.length },
+      ]);
+
+      books.push(...additionalPopularBooks);
+      console.log(
+        `✅ Added ${additionalPopularBooks.length} additional popular books. Final total: ${books.length} books`
+      );
+    }
+
+    // Giới hạn tối đa 10 sách
+    books = books.slice(0, 10);
 
     res.status(200).json({
       data: books,
