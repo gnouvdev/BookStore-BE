@@ -151,9 +151,7 @@ const forgotPassword = async (req, res) => {
       process.env.JWT_SECRET_KEY,
       { expiresIn: "1h" }
     );
-    console.log("EMAIL_USER:", process.env.EMAIL_USER);
-    console.log("EMAIL_APP_PASSWORD:", process.env.EMAIL_APP_PASSWORD);
-    // Create email transporter
+        // Create email transporter
     const transporter = nodemailer.createTransport({
       service: "gmail",
       auth: {
@@ -272,3 +270,4 @@ module.exports = {
   forgotPassword,
   resetPassword,
 };
+

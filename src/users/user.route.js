@@ -16,6 +16,7 @@ const {
   getAdmin,
 } = require("./user.controller");
 const verifyToken = require("../middleware/verifyToken");
+const verifyAdminToken = require("../middleware/verifyAdminToken");
 const jwt = require("jsonwebtoken");
 
 // Đăng ký người dùng
@@ -56,7 +57,7 @@ router.post("/register", async (req, res) => {
 });
 const getCurrentUser = async (req, res) => {
   try {
-    const user = await User.findOne({ firebaseId: req.user.uid });
+    const user = await User.findById(req.user.id);
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -82,10 +83,10 @@ router.post("/wishlist", verifyToken, addWishlist);
 router.delete("/wishlist", verifyToken, removeFromWishlist);
 
 // Other routes
-router.get("/", verifyToken, getAllUsers);
-router.get("/search", verifyToken, searchUsers);
-router.put("/:id", verifyToken, updateUser);
-router.delete("/:id", verifyToken, deleteUser);
+router.get("/", verifyAdminToken, getAllUsers);
+router.get("/search", verifyAdminToken, searchUsers);
+router.put("/:id", verifyAdminToken, updateUser);
+router.delete("/:id", verifyAdminToken, deleteUser);
 
 // Lấy thông tin admin
 router.get("/admin", verifyToken, getAdmin);

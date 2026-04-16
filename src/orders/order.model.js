@@ -76,38 +76,13 @@ const orderSchema = new mongoose.Schema(
       },
       paymentCurrency: { type: String, default: "VND" },
     },
+    inventoryReserved: {
+      type: Boolean,
+      default: false,
+    },
   },
   { timestamps: true }
 );
-
-orderSchema.pre("save", async function (next) {
-  if (!this.user) {
-    return next(new Error("Missing user in order"));
-  }
-  const userExists = await mongoose.model("User").exists({ _id: this.user });
-  if (!userExists) {
-    return next(new Error(`Invalid user ID: ${this.user}`));
-  }
-
-  for (const item of this.productIds) {
-    if (!item.productId) {
-      return next(new Error("Missing productId in order item"));
-    }
-
-    const book = await mongoose.model("Book").findById(item.productId);
-    if (!book) {
-      return next(new Error(`Invalid productId: ${item.productId}`));
-    }
-
-    if (book.quantity < item.quantity) {
-      return next(new Error(`Insufficient stock for book: ${book.title}`));
-    }
-
-    book.quantity -= item.quantity;
-    await book.save();
-  }
-  next();
-});
 
 orderSchema.index({ user: 1 });
 orderSchema.index({ status: 1 });

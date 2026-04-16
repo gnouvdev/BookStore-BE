@@ -1166,17 +1166,20 @@ exports.getCollaborativeRecommendations = async (req, res) => {
  */
 exports.getContextualRecommendations = async (req, res) => {
   try {
-    const userId = req.user?.id;
     const holidayContext = getHolidayContext();
 
     console.log("Contextual recommendation - Holiday context:", holidayContext);
 
+    if (!holidayContext?.isHoliday && !holidayContext?.isNearHoliday) {
+      return res.status(200).json({
+        data: [],
+        context: null,
+      });
+    }
+
     const limit = Number(req.query?.limit) || 20;
     const { books, debug } = await getContextualModelRecommendations({
-      holidayContext:
-        holidayContext.isHoliday || holidayContext.isNearHoliday
-          ? holidayContext
-          : null,
+      holidayContext,
       limit,
     });
 
@@ -1200,7 +1203,14 @@ exports.getContextualRecommendations = async (req, res) => {
 
     res.status(200).json({
       data: books,
-      context: responseContext,
+      context: {
+        isHoliday: holidayContext.isHoliday,
+        isNearHoliday: holidayContext.isNearHoliday,
+        holidayName: holidayContext.holidayName,
+        daysUntil: holidayContext.daysUntil,
+        tags: holidayContext.tags,
+        modelTokens: debug.tokens,
+      },
     });
   } catch (error) {
     console.error("Contextual recommendation error:", error);

@@ -174,6 +174,79 @@ class ChatbotService {
     return hasBookNamePattern || isShortAndSpecific;
   }
 
+  shouldIncludeBooksInResponse(message, isBookDomain, isSpecificBookQuery) {
+    if (!isBookDomain) {
+      return false;
+    }
+
+    if (isSpecificBookQuery) {
+      return true;
+    }
+
+    const lower = message.toLowerCase();
+    const conversationalKeywords = [
+      "la gi",
+      "là gì",
+      "tai sao",
+      "tại sao",
+      "the nao",
+      "thế nào",
+      "nhu the nao",
+      "như thế nào",
+      "giai thich",
+      "giải thích",
+      "tom tat",
+      "tóm tắt",
+      "nghia la",
+      "nghĩa là",
+      "ke ve",
+      "kể về",
+      "noi ve",
+      "nói về",
+    ];
+
+    if (conversationalKeywords.some((keyword) => lower.includes(keyword))) {
+      return false;
+    }
+
+    const recommendationKeywords = [
+      "goi y",
+      "gợi ý",
+      "de xuat",
+      "đề xuất",
+      "recommend",
+      "suggest",
+      "tim sach",
+      "tìm sách",
+      "sach nao",
+      "sách nào",
+      "nhung sach",
+      "những sách",
+      "danh sach",
+      "danh sách",
+      "lien quan",
+      "liên quan",
+      "tuong tu",
+      "tương tự",
+      "the loai",
+      "thể loại",
+      "top sach",
+      "top sách",
+    ];
+
+    recommendationKeywords.push(
+      "ban chay",
+      "bán chạy",
+      "pho bien",
+      "phổ biến",
+      "trending",
+      "best seller",
+      "bestseller"
+    );
+
+    return recommendationKeywords.some((keyword) => lower.includes(keyword));
+  }
+
   // Lấy hoặc tạo conversation state
   getConversationState(userId) {
     if (!userId) return null;
@@ -1354,8 +1427,17 @@ class ChatbotService {
 
       // Kiểm tra xem có phải là câu hỏi về sách cụ thể (có tên sách) hay thể loại/mô tả
       const isSpecific = this.isSpecificBookQuery(trimmedMessage);
+      const shouldIncludeBooks = this.shouldIncludeBooksInResponse(
+        trimmedMessage,
+        isBookDomain,
+        isSpecific
+      );
 
-      if (isSpecific) {
+      if (!shouldIncludeBooks) {
+        books = [];
+      }
+
+      if (shouldIncludeBooks && isSpecific) {
         // Nếu là câu hỏi về sách cụ thể, chỉ trả về 1 cuốn phù hợp nhất
         // Tìm sách trực tiếp từ message trước, không dùng RAG response
         const bestMatch = await this.findBooksInMessage(trimmedMessage, true);
@@ -1387,13 +1469,13 @@ class ChatbotService {
             if (scoredBooks[0] && scoredBooks[0].score > 0) {
               books = [scoredBooks[0].book];
             } else {
-              books = [books[0]];
+              books = [];
             }
           } else {
-            books = [books[0]];
+            books = [];
           }
         }
-      } else if (!isSpecific && books.length > 5) {
+      } else if (shouldIncludeBooks && !isSpecific && books.length > 5) {
         // Nếu là câu hỏi về thể loại/mô tả, giới hạn 5 cuốn
         books = books.slice(0, 5);
       }

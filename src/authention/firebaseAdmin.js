@@ -1,6 +1,5 @@
 const admin = require("firebase-admin");
 
-// Khởi tạo Firebase Admin SDK nếu chưa được khởi tạo
 if (!admin.apps.length) {
   try {
     const serviceAccount = {
@@ -9,7 +8,6 @@ if (!admin.apps.length) {
       clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
     };
 
-    // Validate required fields
     if (
       !serviceAccount.projectId ||
       !serviceAccount.privateKey ||
@@ -29,13 +27,5 @@ if (!admin.apps.length) {
     throw error;
   }
 }
-
-// Sử dụng một secret key cố định cho JWT
-const JWT_SECRET_KEY = "your_super_secret_key_123";
-const JWT_EXPIRES_IN = "7d";
-
-// Export các biến môi trường
-process.env.JWT_SECRET_KEY = JWT_SECRET_KEY;
-process.env.JWT_EXPIRES_IN = JWT_EXPIRES_IN;
 
 module.exports = admin;

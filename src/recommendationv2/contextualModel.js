@@ -349,6 +349,28 @@ const buildModel = async () => {
 const buildQueryVector = (holidayContext) => {
   if (!holidayContext) return null;
   const keywords = new Set(holidayContext.tags || []);
+  const holidayNameNormalized = normalizeText(holidayContext.holidayName || "");
+  const combinedTagsNormalized = normalizeText(
+    Array.isArray(holidayContext.tags) ? holidayContext.tags.join(" ") : ""
+  );
+
+  if (
+    holidayNameNormalized.includes("thieu nhi") ||
+    combinedTagsNormalized.includes("thieu nhi") ||
+    combinedTagsNormalized.includes("tre em") ||
+    combinedTagsNormalized.includes("truyen tranh")
+  ) {
+    [
+      "thiếu nhi",
+      "trẻ em",
+      "sách thiếu nhi",
+      "truyện tranh",
+      "hoạt hình",
+      "manga",
+      "anime",
+    ].forEach((keyword) => keywords.add(keyword));
+  }
+
   if (holidayContext.holidayName) {
     holidayContext.holidayName
       .split(/[&,/]/)
@@ -424,7 +446,43 @@ const computeRecencyScore = (date) => {
   return 0.5;
 };
 
+const CHILD_CONTEXT_TOKENS = new Set([
+  "thieu",
+  "nhi",
+  "tre",
+  "em",
+  "con",
+  "truyen tranh",
+  "hoat hinh",
+]);
+
+const isChildrenContext = (queryTokens = []) =>
+  queryTokens.some((token) => CHILD_CONTEXT_TOKENS.has(token));
+
+const matchesChildrenAudience = (entry) => {
+  const categoryName = normalizeText(entry.book?.category?.name || "");
+  const title = normalizeText(entry.book?.title || "");
+  const tags = Array.isArray(entry.book?.tags)
+    ? normalizeText(entry.book.tags.join(" "))
+    : "";
+
+  return (
+    categoryName.includes("thieu nhi") ||
+    categoryName.includes("truyen tranh") ||
+    categoryName.includes("manga") ||
+    title.includes("thieu nhi") ||
+    tags.includes("thieu nhi") ||
+    tags.includes("tre em") ||
+    tags.includes("truyen tranh") ||
+    tags.includes("hoat hinh") ||
+    tags.includes("manga") ||
+    tags.includes("anime")
+  );
+};
+
 const rankBooksByContext = (query, limit) => {
+  const MIN_CONTEXT_SIMILARITY = 0.035;
+
   if (!query) {
     return modelState.entries
       .slice()
@@ -438,14 +496,19 @@ const rankBooksByContext = (query, limit) => {
   }
 
   const scored = [];
+  const restrictToChildren = isChildrenContext(query.tokens);
   for (const entry of modelState.entries) {
+    if (restrictToChildren && !matchesChildrenAudience(entry)) {
+      continue;
+    }
+
     const similarity = cosineSimilarity(
       entry.vector,
       query.vector,
       entry.norm,
       query.norm
     );
-    if (similarity <= 0) continue;
+    if (similarity < MIN_CONTEXT_SIMILARITY) continue;
     const popularity = computePopularityScore(entry.meta, modelState.stats);
     const recency = computeRecencyScore(entry.meta.createdAt);
     const score = similarity * 0.6 + popularity * 0.3 + recency * 0.1;

@@ -225,7 +225,7 @@ const getAllUsers = async (req, res) => {
 
     const usersWithOrdersCount = await Promise.all(
       users.map(async (user) => {
-        const ordersCount = await Order.countDocuments({ userId: user._id });
+        const ordersCount = await Order.countDocuments({ user: user._id });
         return { ...user.toObject(), ordersCount };
       })
     );
@@ -265,7 +265,7 @@ const searchUsers = async (req, res) => {
 
     const usersWithOrdersCount = await Promise.all(
       users.map(async (user) => {
-        const ordersCount = await Order.countDocuments({ userId: user._id });
+        const ordersCount = await Order.countDocuments({ user: user._id });
         return { ...user.toObject(), ordersCount };
       })
     );

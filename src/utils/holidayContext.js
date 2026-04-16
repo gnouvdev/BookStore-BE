@@ -4,13 +4,10 @@
  */
 function getHolidayContext() {
   // TEST: giả lập ngày 1/6
-  const now = new Date(2025, 5, 1); // 1/6/2025
+  const now = new Date(2025, 5, 1);
 
   const month = now.getMonth() + 1;
   const day = now.getDate();
-  // const now = new Date();
-  // const month = now.getMonth() + 1; // 1-12
-  // const day = now.getDate();
   const year = now.getFullYear();
 
   // Tính ngày lễ di động (âm lịch được tính gần đúng)

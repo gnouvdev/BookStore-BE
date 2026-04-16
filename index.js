@@ -7,31 +7,31 @@ const { Server } = require("socket.io");
 const admin = require("./src/authention/firebaseAdmin");
 
 const app = express();
+const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:5173")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: ["http://localhost:5173", "https://book-store-fe-steel.vercel.app"],
+    origin: allowedOrigins,
     credentials: true,
   },
 });
 const port = process.env.PORT || 5000;
 
-// Lưu io vào app
 app.set("io", io);
 
-// Socket.IO middleware để xác thực
 io.use(async (socket, next) => {
   try {
     const token = socket.handshake.auth.token;
     if (!token) {
-      console.log("No token provided");
       return next(new Error("Authentication error"));
     }
 
-    // Xác thực Firebase token
     const decodedToken = await admin.auth().verifyIdToken(token);
     socket.userId = decodedToken.uid;
-    console.log("Socket authenticated for user:", socket.userId);
     next();
   } catch (error) {
     console.error("Socket authentication error:", error);
@@ -39,42 +39,28 @@ io.use(async (socket, next) => {
   }
 });
 
-// Socket.IO connection
 io.on("connection", (socket) => {
-  console.log("User connected:", socket.id);
-  console.log("Authenticated user ID:", socket.userId);
-
   socket.on("register", (userId) => {
-    console.log(`User ${userId} attempting to join room`);
-    socket.join(userId);
-    console.log(`User ${userId} joined room`);
-
-    // Gửi xác nhận đã join room
-    socket.emit("roomJoined", {
-      userId,
-      message: `Successfully joined room ${userId}`,
-    });
+    if (userId && userId === socket.userId) {
+      socket.join(userId);
+      socket.emit("roomJoined", {
+        userId,
+        message: `Successfully joined room ${userId}`,
+      });
+    }
   });
 
-  socket.on("disconnect", () => {
-    console.log("User disconnected:", socket.id);
-  });
-
-  socket.on("error", (error) => {
-    console.error("Socket error:", error);
-  });
+  socket.on("disconnect", () => {});
 });
 
-// Middleware
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 app.use(
   cors({
-    origin: ["http://localhost:5173", "https://book-store-fe-steel.vercel.app"],
+    origin: allowedOrigins,
     credentials: true,
   })
 );
 
-// Routes
 const bookRoutes = require("./src/books/book.route");
 const orderRoutes = require("./src/orders/order.route");
 const userRoutes = require("./src/users/user.route");
@@ -116,23 +102,32 @@ app.use("/api/chatbot", chatbotRoutes);
 app.use("/api/admin/dashboard", dashboardRoutes);
 app.use("/api/vouchers", voucherRoutes);
 
-// Test route
 app.get("/", (req, res) => {
   res.send("Book Store Server is running!");
 });
 
-// MongoDB connect & start server
+app.use((req, res) => {
+  res.status(404).json({ message: "Route not found" });
+});
+
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(err.status || 500).json({
+    message: err.message || "Internal server error",
+  });
+});
+
 async function main() {
+  if (!process.env.DB_URL) {
+    throw new Error("DB_URL is required");
+  }
+
   await mongoose.connect(process.env.DB_URL);
   server.listen(port, () => {
     console.log(`Book Store backend listening on port ${port}`);
   });
 }
-main()
-  .then(() => console.log("✅ MongoDB connected"))
-  .catch((err) => console.error(err));
 
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({ message: "Route not found" });
-});
+main()
+  .then(() => console.log("MongoDB connected"))
+  .catch((err) => console.error(err));

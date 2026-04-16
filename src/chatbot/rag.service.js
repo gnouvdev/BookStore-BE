@@ -675,24 +675,52 @@ Chỉ trả về JSON hợp lệ, không kèm giải thích.
       .lean();
 
     // Thêm rating và numReviews cho mỗi sách
+    if (books.length === 0) {
+      return books;
+    }
+
     const Review = require("../reviews/review.model");
-    for (let book of books) {
-      try {
-        const reviews = await Review.find({ book: book._id }).lean();
-        book.rating =
-          reviews.length > 0
-            ? reviews.reduce((sum, r) => sum + (r.rating || 0), 0) /
-              reviews.length
-            : 0;
-        book.numReviews = reviews.length;
-      } catch (error) {
-        console.warn(
-          `Error getting reviews for book ${book._id}:`,
-          error.message
-        );
-        book.rating = 0;
-        book.numReviews = 0;
-      }
+    try {
+      const reviewAgg = await Review.aggregate([
+        {
+          $match: {
+            book: { $in: books.map((book) => book._id) },
+          },
+        },
+        {
+          $group: {
+            _id: "$book",
+            rating: { $avg: "$rating" },
+            numReviews: { $sum: 1 },
+          },
+        },
+      ]);
+
+      const reviewMap = new Map(
+        reviewAgg.map((item) => [
+          item._id.toString(),
+          {
+            rating: item.rating || 0,
+            numReviews: item.numReviews || 0,
+          },
+        ])
+      );
+
+      books = books.map((book) => {
+        const reviewInfo = reviewMap.get(book._id.toString());
+        return {
+          ...book,
+          rating: reviewInfo?.rating || 0,
+          numReviews: reviewInfo?.numReviews || 0,
+        };
+      });
+    } catch (error) {
+      console.warn("Error batching reviews for chatbot query:", error.message);
+      books = books.map((book) => ({
+        ...book,
+        rating: 0,
+        numReviews: 0,
+      }));
     }
 
     return books;
@@ -747,15 +775,18 @@ Chỉ trả về JSON hợp lệ, không kèm giải thích.
         // Thêm rating và numReviews cho directMatchBook
         const Review = require("../reviews/review.model");
         try {
-          const reviews = await Review.find({
-            book: directMatchBook._id,
-          }).lean();
-          directMatchBook.rating =
-            reviews.length > 0
-              ? reviews.reduce((sum, r) => sum + (r.rating || 0), 0) /
-                reviews.length
-              : 0;
-          directMatchBook.numReviews = reviews.length;
+          const reviewAgg = await Review.aggregate([
+            { $match: { book: directMatchBook._id } },
+            {
+              $group: {
+                _id: "$book",
+                rating: { $avg: "$rating" },
+                numReviews: { $sum: 1 },
+              },
+            },
+          ]);
+          directMatchBook.rating = reviewAgg[0]?.rating || 0;
+          directMatchBook.numReviews = reviewAgg[0]?.numReviews || 0;
         } catch (error) {
           directMatchBook.rating = 0;
           directMatchBook.numReviews = 0;

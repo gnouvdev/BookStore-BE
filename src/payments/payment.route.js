@@ -6,12 +6,18 @@ const {
   updatePaymentMethod,
   deletePaymentMethod,
 } = require("./payment.controller");
-const { createVNPayUrl, handleVNPayReturn } = require("./vnpay.controller");
+const {
+  createVNPayUrl,
+  handleVNPayIPN,
+  handleVNPayReturn,
+} = require("./vnpay.controller");
+const verifyToken = require("../middleware/verifyToken");
 const verifyAdminToken = require("../middleware/verifyAdminToken");
 
 // Public routes
 router.get("/", getPaymentMethods);
-router.post("/vnpay/create", createVNPayUrl);
+router.post("/vnpay/create", verifyToken, createVNPayUrl);
+router.get("/vnpay/ipn", handleVNPayIPN);
 router.get("/vnpay/return", handleVNPayReturn);
 
 // Admin routes

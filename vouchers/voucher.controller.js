@@ -158,6 +158,7 @@ const createVoucher = async (req, res) => {
       endDate,
       usageLimit,
       description,
+      isActive,
     } = req.body;
 
     // Validate required fields
@@ -212,6 +213,7 @@ const createVoucher = async (req, res) => {
       endDate: end,
       usageLimit: usageLimit || null,
       description: description || "",
+      isActive: typeof isActive === "boolean" ? isActive : true,
     });
 
     res.status(201).json({
@@ -239,9 +241,7 @@ const getAllVouchers = async (req, res) => {
 const updateVoucher = async (req, res) => {
   try {
     const { voucherId } = req.params;
-    const { code, type, value, minOrderValue, maxDiscount, startDate, endDate, usageLimit, description } = req.body;  
-
-    const voucher = await Voucher.findByIdAndUpdate(voucherId, {
+    const {
       code,
       type,
       value,
@@ -251,7 +251,32 @@ const updateVoucher = async (req, res) => {
       endDate,
       usageLimit,
       description,
+      isActive,
+    } = req.body;
+
+    const payload = {};
+    if (code !== undefined) payload.code = String(code).toUpperCase();
+    if (type !== undefined) payload.type = type;
+    if (value !== undefined) payload.value = value;
+    if (minOrderValue !== undefined) payload.minOrderValue = minOrderValue;
+    if (maxDiscount !== undefined) payload.maxDiscount = maxDiscount;
+    if (startDate !== undefined) payload.startDate = startDate;
+    if (endDate !== undefined) payload.endDate = endDate;
+    if (usageLimit !== undefined) payload.usageLimit = usageLimit;
+    if (description !== undefined) payload.description = description;
+    if (isActive !== undefined) payload.isActive = isActive;
+
+    const voucher = await Voucher.findByIdAndUpdate(voucherId, payload, {
+      new: true,
+      runValidators: true,
     });
+
+    if (!voucher) {
+      return res.status(404).json({
+        success: false,
+        message: "Voucher not found",
+      });
+    }
 
     res.status(200).json({
       success: true,

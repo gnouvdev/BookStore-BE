@@ -1,44 +1,36 @@
 const Order = require("./order.model");
+const { createNotification } = require("../notifications/notification.controller");
 const {
-  createNotification,
-} = require("../notifications/notification.controller");
+  calculateOrderTotals,
+  normalizeAddress,
+  releaseInventory,
+  reserveInventory,
+  validateCheckoutPayload,
+} = require("./order.service");
 
 const createAOrder = async (req, res) => {
   try {
-    console.log("Creating order with data:", req.body);
-    console.log("User from request:", req.user);
+    validateCheckoutPayload(req.body);
 
-    const requiredFields = [
-      "name",
-      "email",
-      "address",
-      "phone",
-      "productIds",
-      "totalPrice",
-      "paymentMethod",
-    ];
-    const missingFields = requiredFields.filter((field) => !req.body[field]);
+    const { paymentMethod, normalizedItems, subtotal } = await calculateOrderTotals(
+      req.body.productIds,
+      req.body.paymentMethod
+    );
 
-    if (missingFields.length > 0) {
-      console.log("Missing required fields:", missingFields);
-      return res.status(400).json({
-        success: false,
-        message: `Missing required fields: ${missingFields.join(", ")}`,
-      });
-    }
+    await reserveInventory(normalizedItems);
 
-    // Ensure we're using the correct user ID from the authenticated user
-    const orderData = {
-      ...req.body,
-      user: req.user.id, // Use the MongoDB ID from the JWT token
-    };
-
-    console.log("Creating order with user ID:", orderData.user);
-    const order = await Order.create(orderData);
-    console.log("Order created successfully:", {
-      orderId: order._id,
-      userId: order.user,
-      status: order.status,
+    const order = await Order.create({
+      user: req.user.id,
+      name: req.body.name,
+      email: req.body.email,
+      address: normalizeAddress(req.body.address),
+      phone: req.body.phone,
+      productIds: normalizedItems,
+      totalPrice: subtotal,
+      paymentMethod: paymentMethod._id,
+      status: "pending",
+      paymentStatus: "pending",
+      inventoryReserved: true,
     });
 
     res.status(201).json({
@@ -46,7 +38,7 @@ const createAOrder = async (req, res) => {
       data: order,
     });
   } catch (error) {
-    console.error("Error creating order:", error);
+    console.error("Error creating order:", error.message);
     res.status(500).json({
       success: false,
       message: "Error creating order",
@@ -57,11 +49,6 @@ const createAOrder = async (req, res) => {
 
 const getOrderByEmail = async (req, res) => {
   try {
-    console.log("Getting orders for user:", {
-      id: req.user.id,
-      email: req.user.email,
-    });
-
     const orders = await Order.find({
       $or: [{ user: req.user.id }, { "user.firebaseId": req.user.firebaseId }],
     })
@@ -72,19 +59,6 @@ const getOrderByEmail = async (req, res) => {
         select: "_id firebaseId email",
       })
       .lean();
-
-    // Simplified logging
-    console.log(
-      "Found orders:",
-      orders.map((order) => ({
-        orderId: order._id,
-        userEmail: order.user?.email,
-        status: order.status,
-        products: order.productIds?.map(
-          (item) => item.productId?.title || "Unknown Product"
-        ),
-      }))
-    );
 
     res.status(200).json({
       success: true,
@@ -109,15 +83,28 @@ const updateOrderStatus = async (req, res) => {
       return res.status(400).json({ message: "Status is required" });
     }
 
-    console.log("Admin updating order:", {
-      orderId: id,
-      newStatus: status,
-      adminId: req.user?.id,
-    });
+    const existingOrder = await Order.findById(id);
+    if (!existingOrder) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    if (
+      status === "cancelled" &&
+      existingOrder.inventoryReserved &&
+      existingOrder.status !== "cancelled"
+    ) {
+      await releaseInventory(existingOrder.productIds);
+    }
 
     const order = await Order.findByIdAndUpdate(
       id,
-      { $set: { status } },
+      {
+        $set: {
+          status,
+          inventoryReserved:
+            status === "cancelled" ? false : existingOrder.inventoryReserved,
+        },
+      },
       {
         new: true,
         runValidators: true,
@@ -130,47 +117,22 @@ const updateOrderStatus = async (req, res) => {
       .populate("productIds.productId")
       .populate("paymentMethod");
 
-    if (!order) {
-      return res.status(404).json({ message: "Order not found" });
-    }
-
-    // Simplified logging
-    console.log("Order updated:", {
-      orderId: order._id,
-      userEmail: order.user?.email,
-      oldStatus: order.status,
-      newStatus: status,
-      products: order.productIds?.map(
-        (item) => item.productId?.title || "Unknown Product"
-      ),
-    });
-
-    if (order.user) {
-      const notificationUserId = order.user.firebaseId;
-      console.log("Creating notification for user:", notificationUserId);
-
+    if (order?.user?.firebaseId) {
       const notification = await createNotification(
-        notificationUserId,
-        `Đơn hàng #${order._id} đã được cập nhật: ${status}`,
+        order.user.firebaseId,
+        `Don hang #${order._id} da duoc cap nhat: ${status}`,
         "order",
         { orderId: order._id, status }
       );
 
-      // Simplified notification logging
-      console.log("Notification sent:", {
-        notificationId: notification._id,
-        userId: notification.userId,
-        message: notification.message,
-      });
-
       const io = req.app.get("io");
-      if (io && notificationUserId) {
-        io.to(notificationUserId).emit("orderStatusUpdate", {
+      if (io) {
+        io.to(order.user.firebaseId).emit("orderStatusUpdate", {
           notificationId: notification._id,
-          message: `Đơn hàng #${order._id} đã được cập nhật: ${status}`,
+          message: `Don hang #${order._id} da duoc cap nhat: ${status}`,
           orderId: order._id,
           status,
-          userId: notificationUserId,
+          userId: order.user.firebaseId,
           createdAt: notification.createdAt,
         });
       }
@@ -185,12 +147,10 @@ const updateOrderStatus = async (req, res) => {
 
 const getAllOrders = async (req, res) => {
   try {
-    console.log("Getting all orders");
     const orders = await Order.find()
       .populate("productIds.productId")
       .populate("paymentMethod")
       .lean();
-    console.log("Found orders:", orders);
 
     res.status(200).json({
       success: true,
@@ -208,12 +168,10 @@ const getAllOrders = async (req, res) => {
 
 const getOrdersByUserId = async (req, res) => {
   try {
-    console.log("Getting orders for user ID:", req.params.userId);
     const orders = await Order.find({ user: req.params.userId })
       .populate("productIds.productId")
       .populate("paymentMethod")
       .lean();
-    console.log("Found orders:", orders);
 
     res.status(200).json({
       success: true,
@@ -232,13 +190,18 @@ const getOrdersByUserId = async (req, res) => {
 const deleteOrder = async (req, res) => {
   try {
     const { id } = req.params;
-    const deleteOrder = await Order.findByIdAndDelete(id);
-    if (!deleteOrder) {
-      res.status(404).send({ message: "Order is not found" });
+    const deletedOrder = await Order.findByIdAndDelete(id);
+    if (!deletedOrder) {
+      return res.status(404).send({ message: "Order is not found" });
     }
+
+    if (deletedOrder.inventoryReserved) {
+      await releaseInventory(deletedOrder.productIds);
+    }
+
     res.status(200).send({
       message: "Order deleted successfully",
-      order: deleteOrder,
+      order: deletedOrder,
     });
   } catch (error) {
     console.log("Error deleting order:", error);
@@ -249,14 +212,6 @@ const deleteOrder = async (req, res) => {
 const getOrderById = async (req, res) => {
   try {
     const { id } = req.params;
-    console.log("Getting order details:", {
-      orderId: id,
-      requestUser: {
-        id: req.user.id,
-        email: req.user.email,
-        role: req.user.role,
-      },
-    });
 
     const order = await Order.findById(id)
       .populate("productIds.productId")
@@ -267,22 +222,11 @@ const getOrderById = async (req, res) => {
       });
 
     if (!order) {
-      console.log("Order not found:", id);
       return res.status(404).json({
         success: false,
         message: "Order not found",
       });
     }
-
-    // Simplified logging
-    console.log("Found order:", {
-      orderId: order._id,
-      userEmail: order.user?.email,
-      status: order.status,
-      products: order.productIds?.map(
-        (item) => item.productId?.title || "Unknown Product"
-      ),
-    });
 
     const isAdmin = req.user.role === "admin";
     const isOrderOwner =
@@ -291,22 +235,10 @@ const getOrderById = async (req, res) => {
         order.user.firebaseId === req.user.firebaseId ||
         order.user.email === req.user.email);
 
-    // Simplified authorization logging
-    console.log("Access check:", {
-      isAdmin,
-      isOrderOwner,
-      requestUserEmail: req.user.email,
-      orderUserEmail: order.user?.email,
-    });
-
     if (!isAdmin && !isOrderOwner) {
-      const errorMessage =
-        order.user?.email === "adm@gmail.com"
-          ? "Không thể xem đơn hàng của quản trị viên"
-          : "Bạn không có quyền xem đơn hàng này";
       return res.status(403).json({
         success: false,
-        message: errorMessage,
+        message: "Ban khong co quyen xem don hang nay",
       });
     }
 
@@ -327,14 +259,6 @@ const getOrderById = async (req, res) => {
 const cancelOrder = async (req, res) => {
   try {
     const { id } = req.params;
-    console.log("Cancelling order:", {
-      orderId: id,
-      requestUser: {
-        id: req.user.id,
-        email: req.user.email,
-        role: req.user.role,
-      },
-    });
 
     const order = await Order.findById(id)
       .populate({
@@ -351,7 +275,6 @@ const cancelOrder = async (req, res) => {
       });
     }
 
-    // Kiểm tra quyền: chỉ admin hoặc chủ đơn mới được hủy
     const isAdmin = req.user.role === "admin";
     const isOrderOwner =
       order.user &&
@@ -362,55 +285,44 @@ const cancelOrder = async (req, res) => {
     if (!isAdmin && !isOrderOwner) {
       return res.status(403).json({
         success: false,
-        message: "Bạn không có quyền hủy đơn hàng này",
+        message: "Ban khong co quyen huy don hang nay",
       });
     }
 
-    // Chỉ cho phép hủy đơn hàng ở trạng thái pending
     if (order.status !== "pending") {
       return res.status(400).json({
         success: false,
-        message: `Không thể hủy đơn hàng ở trạng thái "${order.status}". Chỉ có thể hủy đơn hàng ở trạng thái "pending".`,
+        message: `Khong the huy don hang o trang thai \"${order.status}\".`,
       });
     }
 
-    // Cập nhật trạng thái đơn hàng
+    if (order.inventoryReserved) {
+      await releaseInventory(order.productIds);
+      order.inventoryReserved = false;
+    }
+
     order.status = "cancelled";
-    // Nếu paymentStatus vẫn là pending, giữ nguyên hoặc đánh dấu failed
     if (order.paymentStatus === "pending") {
       order.paymentStatus = "failed";
     }
     await order.save();
 
-    console.log("Order cancelled:", {
-      orderId: order._id,
-      userEmail: order.user?.email,
-      cancelledBy: req.user.email,
-    });
-
-    // Tạo notification cho user
-    if (order.user) {
-      const notificationUserId = order.user.firebaseId;
-      const {
-        createNotification,
-      } = require("../notifications/notification.controller");
-
+    if (order.user?.firebaseId) {
       const notification = await createNotification(
-        notificationUserId,
-        `Đơn hàng #${order._id} đã được hủy`,
+        order.user.firebaseId,
+        `Don hang #${order._id} da duoc huy`,
         "order",
         { orderId: order._id, status: "cancelled" }
       );
 
-      // Gửi socket notification
       const io = req.app.get("io");
-      if (io && notificationUserId) {
-        io.to(notificationUserId).emit("orderStatusUpdate", {
+      if (io) {
+        io.to(order.user.firebaseId).emit("orderStatusUpdate", {
           notificationId: notification._id,
-          message: `Đơn hàng #${order._id} đã được hủy`,
+          message: `Don hang #${order._id} da duoc huy`,
           orderId: order._id,
           status: "cancelled",
-          userId: notificationUserId,
+          userId: order.user.firebaseId,
           createdAt: notification.createdAt,
         });
       }
@@ -418,7 +330,7 @@ const cancelOrder = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: "Đơn hàng đã được hủy thành công",
+      message: "Don hang da duoc huy thanh cong",
       data: order,
     });
   } catch (error) {
