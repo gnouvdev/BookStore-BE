@@ -26,7 +26,7 @@ exports.createReview = async (req, res) => {
     // Kiểm tra xem người dùng đã mua sách và đơn hàng đã hoàn thành chưa
     const completedOrder = await Order.findOne({
       email: userEmail,
-      status: "completed",
+      status: { $in: ["completed", "delivered"] },
       productIds: {
         $elemMatch: {
           productId: bookId,
@@ -93,7 +93,7 @@ exports.createReview = async (req, res) => {
     });
 
     // Populate thông tin user
-    await review.populate("user", "displayName email photoURL");
+    await review.populate("user", "fullName email photoURL");
 
     res.status(201).json({
       success: true,
@@ -123,7 +123,7 @@ exports.getBookReviews = async (req, res) => {
     }
 
     const reviews = await Review.find({ book: bookId })
-      .populate("user", "displayName email photoURL")
+      .populate("user", "fullName email photoURL")
       .sort({ createdAt: -1 });
 
     res.status(200).json({
