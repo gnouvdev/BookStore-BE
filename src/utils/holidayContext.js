@@ -4,7 +4,15 @@
  */
 function getHolidayContext() {
   // TEST: giả lập ngày 1/6
-  const now = new Date(2025, 5, 1);
+  const configuredTestDate = process.env.HOLIDAY_TEST_DATE;
+  const parsedTestDate = configuredTestDate
+    ? new Date(configuredTestDate)
+    : null;
+  const now =
+    parsedTestDate && !Number.isNaN(parsedTestDate.getTime())
+      ? parsedTestDate
+      : new Date();
+  now.setHours(0, 0, 0, 0);
 
   const month = now.getMonth() + 1;
   const day = now.getDate();

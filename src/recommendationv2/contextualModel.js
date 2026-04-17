@@ -456,27 +456,50 @@ const CHILD_CONTEXT_TOKENS = new Set([
   "hoat hinh",
 ]);
 
+const EXCLUDED_CHILD_TOKENS = [
+  "kinh di",
+  "horror",
+  "thriller",
+  "tam ly toi pham",
+  "toi pham",
+  "18+",
+  "adult",
+  "nguoi lon",
+  "bao luc",
+];
+
 const isChildrenContext = (queryTokens = []) =>
   queryTokens.some((token) => CHILD_CONTEXT_TOKENS.has(token));
 
 const matchesChildrenAudience = (entry) => {
   const categoryName = normalizeText(entry.book?.category?.name || "");
   const title = normalizeText(entry.book?.title || "");
+  const description = normalizeText(entry.book?.description || "");
   const tags = Array.isArray(entry.book?.tags)
     ? normalizeText(entry.book.tags.join(" "))
     : "";
+
+  const combinedText = `${categoryName} ${title} ${description} ${tags}`;
+
+  if (EXCLUDED_CHILD_TOKENS.some((token) => combinedText.includes(token))) {
+    return false;
+  }
 
   return (
     categoryName.includes("thieu nhi") ||
     categoryName.includes("truyen tranh") ||
     categoryName.includes("manga") ||
     title.includes("thieu nhi") ||
+    title.includes("tre em") ||
     tags.includes("thieu nhi") ||
     tags.includes("tre em") ||
     tags.includes("truyen tranh") ||
     tags.includes("hoat hinh") ||
     tags.includes("manga") ||
-    tags.includes("anime")
+    tags.includes("anime") ||
+    description.includes("thieu nhi") ||
+    description.includes("tre em") ||
+    description.includes("thieu nien")
   );
 };
 

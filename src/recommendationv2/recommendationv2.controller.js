@@ -9,6 +9,77 @@ const mongoose = require("mongoose");
 const { getHolidayContext } = require("../utils/holidayContext");
 const { getContextualModelRecommendations } = require("./contextualModel");
 
+const aggregatePopularBooks = async (limit = 10, excludeIds = []) => {
+  const excludedObjectIds = excludeIds
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+
+  return Book.aggregate([
+    ...(excludedObjectIds.length
+      ? [
+          {
+            $match: {
+              _id: { $nin: excludedObjectIds },
+            },
+          },
+        ]
+      : []),
+    {
+      $lookup: {
+        from: "reviews",
+        localField: "_id",
+        foreignField: "book",
+        as: "reviews",
+      },
+    },
+    {
+      $addFields: {
+        rating: { $avg: "$reviews.rating" },
+        numReviews: { $size: "$reviews" },
+      },
+    },
+    {
+      $lookup: {
+        from: "authors",
+        localField: "author",
+        foreignField: "_id",
+        as: "author",
+      },
+    },
+    {
+      $lookup: {
+        from: "categories",
+        localField: "category",
+        foreignField: "_id",
+        as: "category",
+      },
+    },
+    {
+      $addFields: {
+        author: { $arrayElemAt: ["$author", 0] },
+        category: { $arrayElemAt: ["$category", 0] },
+      },
+    },
+    {
+      $project: {
+        _id: 1,
+        title: 1,
+        description: 1,
+        coverImage: 1,
+        price: 1,
+        rating: { $ifNull: ["$rating", 0] },
+        numReviews: { $ifNull: ["$numReviews", 0] },
+        author: { _id: 1, name: 1 },
+        category: { _id: 1, name: 1 },
+        tags: 1,
+        trending: 1,
+      },
+    },
+    { $sort: { trending: -1, rating: -1, numReviews: -1 } },
+    { $limit: limit },
+  ]);
+};
+
 exports.getCollaborativeRecommendations = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -44,13 +115,13 @@ exports.getCollaborativeRecommendations = async (req, res) => {
     const reviews = await Review.find({
       user: userId,
       rating: { $gte: 3 },
-    }).select("book rating");
+    }).select("book rating createdAt");
     const carts = await Cart.find({
       $or: [{ user: userId }, { firebaseId: userId }],
     }).populate("items.book");
     // Lấy TẤT CẢ views để filter chính xác (không limit)
     const views = await ViewHistory.find({ user: userId })
-      .select("book")
+      .select("book timestamp")
       .sort({ timestamp: -1 });
     const searches = await SearchHistory.find({ user: userId })
       .select("query")
@@ -211,11 +282,7 @@ exports.getCollaborativeRecommendations = async (req, res) => {
     // Nếu user CHƯA CÓ hành vi → Trả về sách phổ biến
     if (Object.keys(userBookIds).length < 1) {
       console.log("User has no interactions, returning popular books");
-      const popularBooks = await Book.find()
-        .sort({ numReviews: -1, rating: -1 })
-        .limit(10)
-        .populate("author", "name")
-        .populate("category", "name");
+      const popularBooks = await aggregatePopularBooks(10);
       return res.status(200).json({ data: popularBooks });
     }
 
@@ -240,15 +307,15 @@ exports.getCollaborativeRecommendations = async (req, res) => {
       user: { $ne: userId },
       rating: { $gte: 3 },
     })
-      .select("book rating")
+      .select("user book rating createdAt")
       .sort({ createdAt: -1 })
       .limit(1000);
-    const allCarts = await Cart.find({ userId: { $ne: userId } })
+    const allCarts = await Cart.find({ user: { $ne: userId } })
       .populate("items.book")
       .sort({ updatedAt: -1 })
       .limit(1000);
     const allViews = await ViewHistory.find({ user: { $ne: userId } })
-      .select("book")
+      .select("user book timestamp")
       .sort({ timestamp: -1 })
       .limit(1000);
     const allSearches = await SearchHistory.find({ user: { $ne: userId } })
@@ -269,11 +336,7 @@ exports.getCollaborativeRecommendations = async (req, res) => {
       console.log(
         "No orders found for other users, falling back to popular books"
       );
-      const popularBooks = await Book.find()
-        .sort({ numReviews: -1, rating: -1 })
-        .limit(10)
-        .populate("author", "name")
-        .populate("category", "name");
+      const popularBooks = await aggregatePopularBooks(10);
       return res.status(200).json({ data: popularBooks });
     }
 
@@ -312,25 +375,32 @@ exports.getCollaborativeRecommendations = async (req, res) => {
     });
     allReviews.forEach((review) => {
       if (review.user && review.book) {
+        const timeDecay = getTimeDecay(review.createdAt);
         processUserBooks(
           review.user,
           review.book.toString(),
-          review.rating / 4
+          (review.rating / 4) * timeDecay
         );
       }
     });
     allCarts.forEach((cart) => {
-      if (cart.userId && cart.items && Array.isArray(cart.items)) {
+      if (cart.user && cart.items && Array.isArray(cart.items)) {
+        const timeDecay = getTimeDecay(cart.updatedAt);
         cart.items.forEach((item) => {
           if (item.book && item.book._id) {
-            processUserBooks(cart.userId, item.book._id.toString(), 0.8);
+            processUserBooks(
+              cart.user,
+              item.book._id.toString(),
+              0.8 * timeDecay
+            );
           }
         });
       }
     });
     allViews.forEach((view) => {
       if (view.user && view.book) {
-        processUserBooks(view.user, view.book.toString(), 0.5);
+        const timeDecay = getTimeDecay(view.timestamp);
+        processUserBooks(view.user, view.book.toString(), 0.5 * timeDecay);
       }
     });
 
@@ -403,7 +473,9 @@ exports.getCollaborativeRecommendations = async (req, res) => {
 
     // Phân tích preferences của user hiện tại từ behavior
     const userPreferences = {
+      categoryIds: new Set(),
       categories: new Set(),
+      authorIds: new Set(),
       authors: new Set(),
       tags: new Set(),
     };
@@ -422,8 +494,12 @@ exports.getCollaborativeRecommendations = async (req, res) => {
         .lean();
 
       userBooks.forEach((book) => {
+        if (book.category?._id)
+          userPreferences.categoryIds.add(book.category._id.toString());
         if (book.category?.name)
           userPreferences.categories.add(book.category.name);
+        if (book.author?._id)
+          userPreferences.authorIds.add(book.author._id.toString());
         if (book.author?.name) userPreferences.authors.add(book.author.name);
         if (Array.isArray(book.tags)) {
           book.tags.forEach((tag) => userPreferences.tags.add(tag));
@@ -536,17 +612,27 @@ exports.getCollaborativeRecommendations = async (req, res) => {
           ),
         },
         $or: [
-          ...(userPreferences.categories.size > 0
+          ...(userPreferences.categoryIds.size > 0
             ? [
                 {
-                  "category.name": {
-                    $in: Array.from(userPreferences.categories),
+                  category: {
+                    $in: Array.from(userPreferences.categoryIds).map(
+                      (id) => new mongoose.Types.ObjectId(id)
+                    ),
                   },
                 },
               ]
             : []),
-          ...(userPreferences.authors.size > 0
-            ? [{ "author.name": { $in: Array.from(userPreferences.authors) } }]
+          ...(userPreferences.authorIds.size > 0
+            ? [
+                {
+                  author: {
+                    $in: Array.from(userPreferences.authorIds).map(
+                      (id) => new mongoose.Types.ObjectId(id)
+                    ),
+                  },
+                },
+              ]
             : []),
           ...(userPreferences.tags.size > 0
             ? [{ tags: { $in: Array.from(userPreferences.tags) } }]
@@ -768,70 +854,10 @@ exports.getCollaborativeRecommendations = async (req, res) => {
       ]);
 
       // Tìm sách phổ biến (không có trong danh sách đã có)
-      const popularBooks = await Book.aggregate([
-        {
-          $match: {
-            _id: {
-              $nin: Array.from(existingBookIds).map(
-                (id) => new mongoose.Types.ObjectId(id)
-              ),
-            },
-          },
-        },
-        {
-          $lookup: {
-            from: "reviews",
-            localField: "_id",
-            foreignField: "book",
-            as: "reviews",
-          },
-        },
-        {
-          $addFields: {
-            rating: { $avg: "$reviews.rating" },
-            numReviews: { $size: "$reviews" },
-          },
-        },
-        {
-          $lookup: {
-            from: "authors",
-            localField: "author",
-            foreignField: "_id",
-            as: "author",
-          },
-        },
-        {
-          $lookup: {
-            from: "categories",
-            localField: "category",
-            foreignField: "_id",
-            as: "category",
-          },
-        },
-        {
-          $addFields: {
-            author: { $arrayElemAt: ["$author", 0] },
-            category: { $arrayElemAt: ["$category", 0] },
-          },
-        },
-        {
-          $project: {
-            _id: 1,
-            title: 1,
-            description: 1,
-            coverImage: 1,
-            price: 1,
-            rating: { $ifNull: ["$rating", 0] },
-            numReviews: { $ifNull: ["$numReviews", 0] },
-            author: { _id: 1, name: 1 },
-            category: { _id: 1, name: 1 },
-            tags: 1,
-            trending: 1,
-          },
-        },
-        { $sort: { trending: -1, rating: -1, numReviews: -1 } },
-        { $limit: 10 - finalBooks.length },
-      ]);
+      const popularBooks = await aggregatePopularBooks(
+        10 - finalBooks.length,
+        Array.from(existingBookIds)
+      );
 
       // Thêm popularBooks vào cuối (có cfScore = 0, sẽ đứng sau collaborative books)
       popularBooks.forEach((book) => {
@@ -874,70 +900,10 @@ exports.getCollaborativeRecommendations = async (req, res) => {
         ...userBookIdsArray,
       ]);
 
-      const popularBooks = await Book.aggregate([
-        {
-          $match: {
-            _id: {
-              $nin: Array.from(existingBookIds).map(
-                (id) => new mongoose.Types.ObjectId(id)
-              ),
-            },
-          },
-        },
-        {
-          $lookup: {
-            from: "reviews",
-            localField: "_id",
-            foreignField: "book",
-            as: "reviews",
-          },
-        },
-        {
-          $addFields: {
-            rating: { $avg: "$reviews.rating" },
-            numReviews: { $size: "$reviews" },
-          },
-        },
-        {
-          $lookup: {
-            from: "authors",
-            localField: "author",
-            foreignField: "_id",
-            as: "author",
-          },
-        },
-        {
-          $lookup: {
-            from: "categories",
-            localField: "category",
-            foreignField: "_id",
-            as: "category",
-          },
-        },
-        {
-          $addFields: {
-            author: { $arrayElemAt: ["$author", 0] },
-            category: { $arrayElemAt: ["$category", 0] },
-          },
-        },
-        {
-          $project: {
-            _id: 1,
-            title: 1,
-            description: 1,
-            coverImage: 1,
-            price: 1,
-            rating: { $ifNull: ["$rating", 0] },
-            numReviews: { $ifNull: ["$numReviews", 0] },
-            author: { _id: 1, name: 1 },
-            category: { _id: 1, name: 1 },
-            tags: 1,
-            trending: 1,
-          },
-        },
-        { $sort: { trending: -1, rating: -1, numReviews: -1 } },
-        { $limit: 10 - books.length },
-      ]);
+      const popularBooks = await aggregatePopularBooks(
+        10 - books.length,
+        Array.from(existingBookIds)
+      );
 
       books.push(...popularBooks);
       console.log(
@@ -956,75 +922,10 @@ exports.getCollaborativeRecommendations = async (req, res) => {
       });
 
       // Tìm sách liên quan đến ngày lễ
-      const matchConditions = [
-        { tags: { $in: holidayContext.tags } },
-        ...holidayContext.tags.map((tag) => ({
-          title: { $regex: tag, $options: "i" },
-        })),
-        ...holidayContext.tags.map((tag) => ({
-          description: { $regex: tag, $options: "i" },
-        })),
-      ];
-
-      const holidayBooks = await Book.aggregate([
-        {
-          $match: {
-            $or: matchConditions,
-          },
-        },
-        {
-          $lookup: {
-            from: "reviews",
-            localField: "_id",
-            foreignField: "book",
-            as: "reviews",
-          },
-        },
-        {
-          $addFields: {
-            rating: { $avg: "$reviews.rating" },
-            numReviews: { $size: "$reviews" },
-          },
-        },
-        {
-          $lookup: {
-            from: "authors",
-            localField: "author",
-            foreignField: "_id",
-            as: "author",
-          },
-        },
-        {
-          $lookup: {
-            from: "categories",
-            localField: "category",
-            foreignField: "_id",
-            as: "category",
-          },
-        },
-        {
-          $addFields: {
-            author: { $arrayElemAt: ["$author", 0] },
-            category: { $arrayElemAt: ["$category", 0] },
-          },
-        },
-        {
-          $project: {
-            _id: 1,
-            title: 1,
-            description: 1,
-            coverImage: 1,
-            price: 1,
-            rating: { $ifNull: ["$rating", 0] },
-            numReviews: { $ifNull: ["$numReviews", 0] },
-            author: { _id: 1, name: 1 },
-            category: { _id: 1, name: 1 },
-            tags: 1,
-          },
-        },
-        { $sort: { rating: -1, numReviews: -1 } },
-        { $limit: 5 },
-      ]);
+      const { books: holidayBooks } = await getContextualModelRecommendations({
+        holidayContext,
+        limit: 5,
+      });
 
       if (holidayBooks.length > 0) {
         console.log(`Found ${holidayBooks.length} holiday-related books`);
@@ -1066,70 +967,10 @@ exports.getCollaborativeRecommendations = async (req, res) => {
         ...userBookIdsArray,
       ]);
 
-      const additionalPopularBooks = await Book.aggregate([
-        {
-          $match: {
-            _id: {
-              $nin: Array.from(existingBookIds).map(
-                (id) => new mongoose.Types.ObjectId(id)
-              ),
-            },
-          },
-        },
-        {
-          $lookup: {
-            from: "reviews",
-            localField: "_id",
-            foreignField: "book",
-            as: "reviews",
-          },
-        },
-        {
-          $addFields: {
-            rating: { $avg: "$reviews.rating" },
-            numReviews: { $size: "$reviews" },
-          },
-        },
-        {
-          $lookup: {
-            from: "authors",
-            localField: "author",
-            foreignField: "_id",
-            as: "author",
-          },
-        },
-        {
-          $lookup: {
-            from: "categories",
-            localField: "category",
-            foreignField: "_id",
-            as: "category",
-          },
-        },
-        {
-          $addFields: {
-            author: { $arrayElemAt: ["$author", 0] },
-            category: { $arrayElemAt: ["$category", 0] },
-          },
-        },
-        {
-          $project: {
-            _id: 1,
-            title: 1,
-            description: 1,
-            coverImage: 1,
-            price: 1,
-            rating: { $ifNull: ["$rating", 0] },
-            numReviews: { $ifNull: ["$numReviews", 0] },
-            author: { _id: 1, name: 1 },
-            category: { _id: 1, name: 1 },
-            tags: 1,
-            trending: 1,
-          },
-        },
-        { $sort: { trending: -1, rating: -1, numReviews: -1 } },
-        { $limit: 10 - books.length },
-      ]);
+      const additionalPopularBooks = await aggregatePopularBooks(
+        10 - books.length,
+        Array.from(existingBookIds)
+      );
 
       books.push(...additionalPopularBooks);
       console.log(

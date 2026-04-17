@@ -63,13 +63,16 @@ const login = async (req, res) => {
         email,
         firebaseId: uid,
         fullName: displayName || email.split("@")[0],
-        avatar: photoURL,
+        photoURL,
         role: "user",
       });
       console.log("New user created:", { id: user._id, email: user.email });
     } else if (user.firebaseId !== uid) {
       console.log("Updating user's Firebase ID");
       user.firebaseId = uid;
+      await user.save();
+    } else if (!user.photoURL && photoURL) {
+      user.photoURL = photoURL;
       await user.save();
     }
 
@@ -87,7 +90,7 @@ const login = async (req, res) => {
         email: user.email,
         fullName: user.fullName,
         role: user.role,
-        avatar: user.avatar,
+        photoURL: user.photoURL,
       },
     });
   } catch (error) {

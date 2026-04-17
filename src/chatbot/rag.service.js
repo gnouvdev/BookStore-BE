@@ -880,7 +880,12 @@ Chỉ trả về JSON hợp lệ, không kèm giải thích.
 
       // Bước 7: Đảm bảo books array match với response text
       // Extract book titles từ response text và filter books
-      const matchedBooks = this.matchBooksWithResponse(responseText, books);
+      const matchedBooks =
+        entities.intent === "recommendation" ||
+        entities.intent === "search" ||
+        entities.intent === "bestseller"
+          ? books
+          : this.matchBooksWithResponse(responseText, books);
 
       return {
         text: responseText,
@@ -1195,7 +1200,6 @@ Yêu cầu:
     // Nếu có titles được đề cập, ưu tiên những sách đó
     if (mentionedTitles.length > 0) {
       const matchedBooks = [];
-      const unmatchedBooks = [];
 
       books.forEach((book) => {
         const bookTitle = book.title || "";
@@ -1216,17 +1220,15 @@ Yêu cầu:
 
         if (isMentioned) {
           matchedBooks.push(book);
-        } else {
-          unmatchedBooks.push(book);
         }
       });
 
       // Trả về matched books trước, sau đó là unmatched
-      return [...matchedBooks, ...unmatchedBooks];
+      return matchedBooks;
     }
 
     // Nếu không có titles được đề cập, trả về books như cũ
-    return books;
+    return [];
   }
 
   // Xây dựng text gợi ý sách

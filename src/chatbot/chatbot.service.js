@@ -11,6 +11,7 @@ const Voucher = require("../../vouchers/voucher.model");
 const Payment = require("../payments/payment.model");
 const vnpayController = require("../payments/vnpay.controller");
 const paymentService = require("../payments/payment.service");
+const Chat = require("../chat/chat.model");
 
 class ChatbotService {
   constructor() {
@@ -313,6 +314,89 @@ class ChatbotService {
       clearTimeout(this.conversationTimeouts.get(userId));
       this.conversationTimeouts.delete(userId);
     }
+  }
+
+  isContextDependentMessage(message) {
+    const lower = (message || "").toLowerCase().trim();
+    if (!lower) return false;
+
+    const shortReplies = [
+      "ừ",
+      "uh",
+      "ok",
+      "oke",
+      "đúng",
+      "đúng rồi",
+      "phải",
+      "phải rồi",
+      "không",
+      "không phải",
+      "có",
+      "không có",
+      "lấy cái đó",
+      "cuốn đó",
+      "quyển đó",
+      "nó đó",
+      "cái thứ hai",
+      "cái thứ 2",
+      "cái đầu",
+      "cái đầu tiên",
+      "cái sau",
+      "quyển đầu",
+      "quyển thứ hai",
+      "cuốn thứ hai",
+      "mình chọn cuốn đó",
+      "mình lấy cuốn đó",
+    ];
+
+    if (shortReplies.includes(lower)) {
+      return true;
+    }
+
+    return lower.split(/\s+/).length <= 6;
+  }
+
+  async getRecentConversationContext(userId, currentMessage) {
+    if (!userId) return [];
+
+    try {
+      const recentMessages = await Chat.find({
+        $or: [
+          { senderId: userId, receiverId: "chatbot" },
+          { senderId: "chatbot", receiverId: userId },
+        ],
+      })
+        .sort({ createdAt: -1 })
+        .limit(8)
+        .lean();
+
+      if (!recentMessages.length) {
+        return [];
+      }
+
+      const orderedMessages = recentMessages.reverse();
+
+      return orderedMessages.filter((entry, index) => {
+        const normalized = (entry.message || "").trim();
+        const isLatest = index === orderedMessages.length - 1;
+        return !(isLatest && entry.senderId === userId && normalized === currentMessage);
+      });
+    } catch (error) {
+      console.error("Error getting recent chatbot context:", error);
+      return [];
+    }
+  }
+
+  buildMessageWithContext(message, historyEntries) {
+    if (!historyEntries || !historyEntries.length) {
+      return message;
+    }
+
+    const historyBlock = historyEntries
+      .map((entry) => `${entry.senderId === "chatbot" ? "Bot" : "User"}: ${entry.message}`)
+      .join("\n");
+
+    return `Lịch sử hội thoại gần nhất:\n${historyBlock}\n\nTin nhắn mới nhất của user: ${message}\n\nHãy trả lời dựa trên ngữ cảnh hội thoại nếu câu mới phụ thuộc vào các tin nhắn trước đó.`;
   }
 
   // ==== Order Flow Handlers ====
@@ -1144,6 +1228,120 @@ class ChatbotService {
     }
   }
 
+  isAvailabilityQuery(message) {
+    const lower = (message || "").toLowerCase();
+    return [
+      "có không",
+      "con khong",
+      "còn không",
+      "hết hàng",
+      "het hang",
+      "còn hàng",
+      "con hang",
+      "available",
+      "in stock",
+    ].some((keyword) => lower.includes(keyword));
+  }
+
+  async findSpecificBookInCatalog(message) {
+    try {
+      const cleanMessage = (message || "")
+        .replace(
+          /(cho mình hỏi|cho toi hoi|cho tôi hỏi|mình hỏi|toi hoi|tôi hỏi|sách|cuốn|quyển|book|co khong|có không|còn không|con khong|không|khong|còn hàng|con hang|hết hàng|het hang|gửi lại|gui lai|xem lại|xem sach|xem sách|nội dung tương tự|tuong tu)/gi,
+          " "
+        )
+        .replace(/[^\w\sÀ-ỹ]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      if (!cleanMessage || cleanMessage.length < 2) {
+        return null;
+      }
+
+      const exactTitle = await Book.findOne({
+        title: { $regex: new RegExp(`^${this.escapeRegex(cleanMessage)}$`, "i") },
+      })
+        .populate("author", "name")
+        .populate("category", "name")
+        .lean();
+
+      if (exactTitle) {
+        return exactTitle;
+      }
+
+      const candidateBooks = await Book.find({
+        title: { $regex: new RegExp(this.escapeRegex(cleanMessage), "i") },
+      })
+        .populate("author", "name")
+        .populate("category", "name")
+        .limit(8)
+        .lean();
+
+      if (!candidateBooks.length) {
+        return null;
+      }
+
+      const keywords = cleanMessage
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((word) => word.length >= 2);
+
+      const ranked = candidateBooks
+        .map((book) => {
+          const normalizedTitle = (book.title || "").toLowerCase();
+          const titleScore = keywords.reduce(
+            (sum, keyword) => sum + (normalizedTitle.includes(keyword) ? 1 : 0),
+            0
+          );
+          const exactLike = normalizedTitle === cleanMessage.toLowerCase() ? 2 : 0;
+          return {
+            book,
+            score: titleScore + exactLike,
+          };
+        })
+        .sort((a, b) => b.score - a.score);
+
+      return ranked[0]?.book || null;
+    } catch (error) {
+      console.error("Error finding specific book in catalog:", error);
+      return null;
+    }
+  }
+
+  buildSpecificBookResponse(book, message) {
+    const authorName = book?.author?.name || "Không rõ tác giả";
+    const categoryName = Array.isArray(book?.category)
+      ? book.category.map((item) => item?.name).filter(Boolean).join(", ")
+      : book?.category?.name || "Chưa phân loại";
+    const quantity = Number(book?.quantity || 0);
+    const currentPrice =
+      typeof book?.price === "number"
+        ? book.price
+        : book?.price?.newPrice || book?.price?.oldPrice || 0;
+
+    if (this.isAvailabilityQuery(message)) {
+      if (quantity > 0) {
+        return {
+          text: `Có, hiện BookEco đang có "${book.title}" của ${authorName}. Cuốn này thuộc nhóm ${categoryName.toLowerCase()} và đang sẵn hàng để bạn xem chi tiết hoặc thêm vào giỏ.`,
+          books: [book],
+          hasBooks: true,
+        };
+      }
+
+      return {
+        text: `Có, "${book.title}" của ${authorName} hiện vẫn có trong catalog của BookEco, nhưng đang tạm hết hàng. Mình vẫn gửi đúng cuốn này để bạn xem lại thông tin và có thể theo dõi khi nhập thêm.`,
+        books: [book],
+        hasBooks: true,
+      };
+    }
+
+    return {
+      text: `"${book.title}" là đầu sách của ${authorName}, thuộc nhóm ${categoryName.toLowerCase()}. ${quantity > 0 ? `Hiện sách đang sẵn hàng với mức giá khoảng ${Number(currentPrice || 0).toLocaleString("vi-VN")}đ.` : "Hiện sách đang tạm hết hàng trong kho."}`,
+      books: [book],
+      hasBooks: true,
+    };
+  }
+
   // Xử lý cập nhật profile từ message
   async updateProfileFromMessage(message, state, userId) {
     try {
@@ -1380,16 +1578,41 @@ class ChatbotService {
       }
 
       // 2. Quyết định route: CÂU HỎI VỀ SÁCH hay CÂU HỎI TỔNG QUÁT / SUPPORT?
+      const specificCatalogBook = await this.findSpecificBookInCatalog(
+        trimmedMessage
+      );
+      if (specificCatalogBook && this.isSpecificBookQuery(trimmedMessage)) {
+        if (userId) {
+          this.saveRecentBooksContext(userId, [specificCatalogBook]);
+        }
+        return this.buildSpecificBookResponse(
+          specificCatalogBook,
+          trimmedMessage
+        );
+      }
+
       const isBookDomain = this.isBookDomainMessage(trimmedMessage);
+      const recentConversation = await this.getRecentConversationContext(
+        userId,
+        trimmedMessage
+      );
+      const hasRecentBooksContext = !!this.getRecentBooksContext(userId)?.length;
+      const isContextDependent = this.isContextDependentMessage(trimmedMessage);
+      const effectiveBookDomain =
+        isBookDomain || (isContextDependent && hasRecentBooksContext);
+      const messageForModel =
+        recentConversation.length && isContextDependent
+          ? this.buildMessageWithContext(trimmedMessage, recentConversation)
+          : trimmedMessage;
 
       let response;
 
-      if (!isBookDomain && typeof ragService.generalChat === "function") {
+      if (!effectiveBookDomain && typeof ragService.generalChat === "function") {
         // Hỏi ngoài sách -> dùng general chat với OpenAI
-        response = await ragService.generalChat(trimmedMessage, userId);
+        response = await ragService.generalChat(messageForModel, userId);
       } else {
         // Hỏi về sách hoặc không chắc -> dùng RAG trước
-        response = await ragService.query(trimmedMessage, userId);
+        response = await ragService.query(messageForModel, userId);
       }
 
       console.log("Chatbot service response:", {
@@ -1429,7 +1652,7 @@ class ChatbotService {
       const isSpecific = this.isSpecificBookQuery(trimmedMessage);
       const shouldIncludeBooks = this.shouldIncludeBooksInResponse(
         trimmedMessage,
-        isBookDomain,
+        effectiveBookDomain,
         isSpecific
       );
 
