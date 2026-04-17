@@ -2,6 +2,10 @@ const SearchHistory = require("./searchHistory.model");
 const mongoose = require("mongoose");
 const User = require("../users/user.model");
 
+const normalizeQuery = (value = "") => value.trim().replace(/\s+/g, " ");
+const escapeRegex = (value = "") =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 exports.addSearch = async (req, res) => {
   try {
     // Log chi tiết request
@@ -15,9 +19,10 @@ exports.addSearch = async (req, res) => {
 
     const { query } = req.body;
     const userId = req.user.id; // Get user ID from JWT token
+    const cleanedQuery = normalizeQuery(query);
 
-    if (!userId || !query) {
-      console.log("Missing data:", { userId, query });
+    if (!userId || !cleanedQuery) {
+      console.log("Missing data:", { userId, query: cleanedQuery });
       return res.status(400).json({ message: "Missing userId or query" });
     }
 
@@ -31,15 +36,26 @@ exports.addSearch = async (req, res) => {
     // Log trước khi tạo
     console.log("Creating search history with:", {
       user: user._id,
-      query,
+      query: cleanedQuery,
       timestamp: new Date(),
     });
 
-    const search = await SearchHistory.create({
-      user: user._id,
-      query,
-      timestamp: new Date(),
-    });
+    const search = await SearchHistory.findOneAndUpdate(
+      {
+        user: user._id,
+        query: { $regex: new RegExp(`^${escapeRegex(cleanedQuery)}$`, "i") },
+      },
+      {
+        user: user._id,
+        query: cleanedQuery,
+        timestamp: new Date(),
+      },
+      {
+        new: true,
+        upsert: true,
+        setDefaultsOnInsert: true,
+      }
+    );
 
     // Log sau khi tạo thành công
     console.log("Search history created successfully:", search);
@@ -73,10 +89,21 @@ exports.getSearchHistory = async (req, res) => {
     // Get recent search history, sorted by timestamp
     const searchHistory = await SearchHistory.find({ user: user._id })
       .sort({ timestamp: -1 })
-      .limit(10)
+      .limit(30)
       .select("query timestamp");
 
-    res.status(200).json({ data: searchHistory });
+    const uniqueHistory = [];
+    const seenQueries = new Set();
+
+    for (const item of searchHistory) {
+      const normalized = normalizeQuery(item.query).toLowerCase();
+      if (seenQueries.has(normalized)) continue;
+      seenQueries.add(normalized);
+      uniqueHistory.push(item);
+      if (uniqueHistory.length >= 10) break;
+    }
+
+    res.status(200).json({ data: uniqueHistory });
   } catch (error) {
     console.error("Error getting search history:", error);
     res.status(500).json({ message: "Internal server error" });
